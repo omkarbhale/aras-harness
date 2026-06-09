@@ -1,0 +1,147 @@
+import { tool } from '@langchain/core/tools'
+import { interrupt } from '@langchain/langgraph'
+import { z } from 'zod'
+import type { ArasClient } from '../aras'
+import { isWriteAml, summarizeAml } from './amlIntrospection'
+
+/** Decision passed back into the graph when resuming an approval interrupt. */
+export interface ApprovalDecision {
+  approved: boolean
+}
+
+/** Payload surfaced to the UI when a tool pauses for approval. */
+export interface ApprovalRequest {
+  kind: 'approval'
+  approvalId: string
+  tool: string
+  summary: string
+  payload: unknown
+}
+
+export interface AgentToolDeps {
+  /** Returns the client for the active connection, or throws a readable error. */
+  getClient: () => ArasClient
+  /** Id generator (injectable for tests). */
+  genId?: () => string
+}
+
+const MAX_ITEMS_IN_RESULT = 50
+
+function summarizeResult(items: { id: string; type: string; properties: Record<string, string> }[]): string {
+  const truncated = items.slice(0, MAX_ITEMS_IN_RESULT)
+  return JSON.stringify({
+    count: items.length,
+    truncated: items.length > MAX_ITEMS_IN_RESULT,
+    items: truncated
+  })
+}
+
+/**
+ * Builds the Aras tool set the agent can call. Read tools run directly; `run_aml`
+ * routes any *mutating* AML through a LangGraph `interrupt()` so the user must approve
+ * it first — the same primitive a coding agent uses for permission prompts.
+ */
+export function createArasTools(deps: AgentToolDeps) {
+  const genId = deps.genId ?? (() => globalThis.crypto.randomUUID())
+
+  const runAml = tool(
+    async ({ aml }: { aml: string }) => {
+      if (isWriteAml(aml)) {
+        const request: ApprovalRequest = {
+          kind: 'approval',
+          approvalId: genId(),
+          tool: 'run_aml',
+          summary: summarizeAml(aml),
+          payload: { aml }
+        }
+        // Pauses the graph; resumes with the ApprovalDecision passed via Command({ resume }).
+        const decision = interrupt(request) as ApprovalDecision
+        if (!decision?.approved) {
+          return 'The user did NOT approve this write. The AML was not executed.'
+        }
+      }
+      const result = await deps.getClient().runAml(aml)
+      return summarizeResult(result.items)
+    },
+    {
+      name: 'run_aml',
+      description:
+        'Execute an AML query against the live Aras instance. Use for reads (action="get") ' +
+        'and writes (add/update/delete). Writes require user approval before they run. ' +
+        'Pass a complete AML document, e.g. <AML><Item type="Part" action="get" select="id,item_number" maxRecords="25"/></AML>.',
+      schema: z.object({
+        aml: z.string().describe('A complete AML document wrapped in <AML>...</AML>.')
+      })
+    }
+  )
+
+  const runOData = tool(
+    async ({ query }: { query: string }) => {
+      const result = await deps.getClient().runODataQuery(query)
+      return JSON.stringify(result).slice(0, 8000)
+    },
+    {
+      name: 'run_odata_query',
+      description:
+        'Run a read-only OData GET against /server/odata. Provide the path + query, e.g. ' +
+        '`Part?$top=10&$select=item_number,name&$filter=...`.',
+      schema: z.object({
+        query: z.string().describe('OData path and query appended to /server/odata/')
+      })
+    }
+  )
+
+  const listItemTypes = tool(
+    async () => {
+      const result = await deps
+        .getClient()
+        .runAml('<AML><Item type="ItemType" action="get" select="name,label" orderBy="name" /></AML>')
+      const names = result.items.map((i) => i.properties.name).filter(Boolean)
+      return JSON.stringify({ count: names.length, itemTypes: names })
+    },
+    {
+      name: 'list_itemtypes',
+      description: 'List the names of all ItemTypes defined in the connected Aras instance.',
+      schema: z.object({})
+    }
+  )
+
+  const introspectItemType = tool(
+    async ({ name }: { name: string }) => {
+      const aml =
+        `<AML><Item type="ItemType" action="get" select="name,label">` +
+        `<name>${name}</name>` +
+        `<Relationships><Item type="Property" action="get" select="name,label,data_type,data_source" /></Relationships>` +
+        `</Item></AML>`
+      const result = await deps.getClient().runAml(aml)
+      return summarizeResult(result.items)
+    },
+    {
+      name: 'introspect_itemtype',
+      description:
+        'Get an ItemType and its Property definitions (name, label, data_type). Use this to ' +
+        'discover the schema before writing AML against an unfamiliar ItemType.',
+      schema: z.object({ name: z.string().describe('Exact ItemType name, e.g. "Part".') })
+    }
+  )
+
+  const getMethodSource = tool(
+    async ({ name }: { name: string }) => {
+      const aml =
+        `<AML><Item type="Method" action="get" select="name,method_type,method_code">` +
+        `<name>${name}</name></Item></AML>`
+      const result = await deps.getClient().runAml(aml)
+      if (result.count === 0) return `No Method named "${name}" was found.`
+      return summarizeResult(result.items)
+    },
+    {
+      name: 'get_method_source',
+      description: 'Fetch the source code (method_code) and type of a server/client Method by name.',
+      schema: z.object({ name: z.string().describe('Exact Method name.') })
+    }
+  )
+
+  return [runAml, runOData, listItemTypes, introspectItemType, getMethodSource]
+}
+
+export type AgentTool = ReturnType<typeof createArasTools>[number]

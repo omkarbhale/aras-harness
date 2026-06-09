@@ -1,0 +1,67 @@
+import { z } from 'zod'
+
+/**
+ * Persisted application configuration schema (non-secret). Secrets — connection
+ * passwords and LLM API keys — are stored separately in the OS keychain and are
+ * never part of this object.
+ */
+
+export const connectionRecordSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  instanceUrl: z.string().url(),
+  database: z.string().min(1),
+  username: z.string().min(1)
+})
+export type ConnectionRecord = z.infer<typeof connectionRecordSchema>
+
+export const llmProviderSchema = z.enum(['anthropic', 'openai', 'ollama'])
+
+export const llmConfigSchema = z.object({
+  provider: llmProviderSchema,
+  model: z.string().min(1),
+  baseUrl: z.string().url().optional()
+})
+export type LlmConfig = z.infer<typeof llmConfigSchema>
+
+export const appConfigSchema = z.object({
+  connections: z.array(connectionRecordSchema).default([]),
+  activeConnectionId: z.string().nullable().default(null),
+  llm: llmConfigSchema.nullable().default(null)
+})
+export type AppConfig = z.infer<typeof appConfigSchema>
+
+export const defaultAppConfig: AppConfig = {
+  connections: [],
+  activeConnectionId: null,
+  llm: null
+}
+
+/** Parse loosely-typed persisted data, falling back to defaults on corruption. */
+export function parseAppConfig(raw: unknown): AppConfig {
+  const result = appConfigSchema.safeParse(raw)
+  return result.success ? result.data : defaultAppConfig
+}
+
+// ----------------------------------------------------------------------------
+// Persistence ports — implemented in the main process (electron-store / safeStorage),
+// faked in tests. Keeping them as interfaces is what keeps `core` framework-agnostic.
+// ----------------------------------------------------------------------------
+
+export interface ConfigStore {
+  load(): AppConfig
+  save(config: AppConfig): void
+}
+
+export interface SecretStore {
+  get(key: string): string | null
+  set(key: string, value: string): void
+  delete(key: string): void
+  has(key: string): boolean
+}
+
+/** Stable secret-key conventions so all callers agree on where secrets live. */
+export const secretKeys = {
+  connectionPassword: (connectionId: string) => `conn-password:${connectionId}`,
+  llmApiKey: (provider: string) => `llm-apikey:${provider}`
+} as const
