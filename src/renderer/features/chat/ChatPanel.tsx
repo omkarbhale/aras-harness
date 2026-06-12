@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useAgent, type ChatItem } from './useAgent'
 
 export function ChatPanel(): JSX.Element {
-  const { items, busy, send, respond } = useAgent()
+  const { items, busy, send, respond, cancel } = useAgent()
   const [draft, setDraft] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -29,7 +29,12 @@ export function ChatPanel(): JSX.Element {
         {items.map((item) => (
           <ChatEntry key={item.id} item={item} onRespond={respond} />
         ))}
-        {busy && <div className="muted">● working…</div>}
+        {busy && (
+          <div className="working-row">
+            <span className="muted">● working…</span>
+            <button className="stop-btn" onClick={cancel}>■ Stop</button>
+          </div>
+        )}
       </div>
       <div className="chat-input">
         <textarea

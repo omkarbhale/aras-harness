@@ -43,6 +43,15 @@ export interface TestResult {
 
 export type LlmProviderId = 'anthropic' | 'openai' | 'ollama'
 
+/** Agent behaviour settings (non-secret, persisted in config store). */
+export interface AgentSettings {
+  toolTimeoutSec: number
+}
+
+export interface AgentSettingsInput {
+  toolTimeoutSec: number
+}
+
 /** LLM settings as exposed to the UI — never contains the API key. */
 export interface LlmSettings {
   provider: LlmProviderId
@@ -111,9 +120,12 @@ export const IpcChannels = {
   connectionsTest: 'connections:test',
   settingsGetLlm: 'settings:getLlm',
   settingsSaveLlm: 'settings:saveLlm',
+  settingsGetAgent: 'settings:getAgent',
+  settingsSaveAgent: 'settings:saveAgent',
   queryRunAml: 'query:runAml',
   agentSend: 'agent:send',
   agentApprove: 'agent:approve',
+  agentCancel: 'agent:cancel',
   /** Push channel: main -> renderer AgentEvent stream. */
   agentEvent: 'agent:event'
 } as const
@@ -134,6 +146,8 @@ export interface HarnessApi {
   settings: {
     getLlm(): Promise<LlmSettings | null>
     saveLlm(input: LlmSettingsInput): Promise<LlmSettings>
+    getAgent(): Promise<AgentSettings>
+    saveAgent(input: AgentSettingsInput): Promise<AgentSettings>
   }
   query: {
     runAml(body: string): Promise<AmlResult>
@@ -143,6 +157,8 @@ export interface HarnessApi {
     send(message: string): Promise<{ runId: string }>
     /** Answer a pending approval_request. */
     approve(approvalId: string, approved: boolean): Promise<void>
+    /** Cancel the running agent run. */
+    cancel(runId: string): Promise<void>
     /** Subscribe to the agent event stream. Returns an unsubscribe function. */
     onEvent(cb: (event: AgentEvent) => void): () => void
   }

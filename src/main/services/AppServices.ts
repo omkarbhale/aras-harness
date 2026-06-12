@@ -63,12 +63,27 @@ export class AppServices {
       apiKey
     )
 
+    const agentSettings = this.settings.getAgentSettings()
+    // `agentRef` is set after construction; the closure captures the variable binding so
+    // `getSignal` always reads the live instance even though tools are built first.
+    let agentRef: AgentService | undefined
     const tools = new ToolRegistry()
-      .register(createArasTools({ getClient: () => this.getActiveClient() }))
+      .register(createArasTools({
+        getClient: () => this.getActiveClient(),
+        getSignal: () => agentRef?.getCurrentSignal(),
+        toolTimeoutMs: agentSettings.toolTimeoutSec * 1000
+      }))
       .list()
 
-    this.agent = new AgentService(model, tools)
+    const agent = new AgentService(model, tools)
+    agentRef = agent
+    this.agent = agent
     return this.agent
+  }
+
+  /** Cancel the currently running agent turn. */
+  cancelCurrentRun(): void {
+    this.agent?.cancel()
   }
 
   /** The live agent if one exists (for routing approval decisions). */

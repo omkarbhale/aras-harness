@@ -23,6 +23,7 @@ export function useAgent() {
   const [items, setItems] = useState<ChatItem[]>([])
   const [busy, setBusy] = useState(false)
   const nextId = useRef(0)
+  const currentRunId = useRef<string | null>(null)
   const id = () => nextId.current++
 
   const handleEvent = useCallback((event: AgentEvent) => {
@@ -109,7 +110,14 @@ export function useAgent() {
   const send = useCallback((message: string) => {
     setItems((prev) => [...prev, { id: nextId.current++, kind: 'user', text: message }])
     setBusy(true)
-    void window.api.agent.send(message)
+    void window.api.agent.send(message).then(({ runId }) => {
+      currentRunId.current = runId
+    })
+  }, [])
+
+  const cancel = useCallback(() => {
+    const runId = currentRunId.current
+    if (runId) void window.api.agent.cancel(runId)
   }, [])
 
   const respond = useCallback((approvalId: string, approved: boolean) => {
@@ -123,5 +131,5 @@ export function useAgent() {
     void window.api.agent.approve(approvalId, approved)
   }, [])
 
-  return { items, busy, send, respond }
+  return { items, busy, send, respond, cancel }
 }

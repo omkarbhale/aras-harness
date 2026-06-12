@@ -1,5 +1,6 @@
 export {
   appConfigSchema,
+  agentConfigSchema,
   connectionRecordSchema,
   llmConfigSchema,
   defaultAppConfig,
@@ -8,6 +9,7 @@ export {
 } from './settings'
 export type {
   AppConfig,
+  AgentConfig,
   ConnectionRecord,
   LlmConfig,
   ConfigStore,

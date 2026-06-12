@@ -157,7 +157,7 @@ export class ArasClient {
    * Execute a raw AML body. The body is wrapped in a SOAP envelope and POSTed to the
    * Innovator AML gateway. Returns parsed items, or throws on fault/HTTP error.
    */
-  async runAml(amlBody: string): Promise<AmlResult> {
+  async runAml(amlBody: string, signal?: AbortSignal): Promise<AmlResult> {
     const token = await this.getToken()
     const url = joinUrl(this.creds.instanceUrl, '/Server/InnovatorServer.aspx')
     const envelope =
@@ -175,7 +175,8 @@ export class ArasClient {
         'Content-Type': 'text/xml; charset=utf-8',
         DATABASE: this.creds.database
       },
-      body: envelope
+      body: envelope,
+      signal
     })
     if (res.status === 401) {
       this.invalidateToken()
@@ -191,14 +192,15 @@ export class ArasClient {
    * Run an OData GET query. `path` is appended to `/server/odata` — e.g.
    * `Part?$top=10&$filter=...`. Returns the parsed JSON payload.
    */
-  async runODataQuery(path: string): Promise<unknown> {
+  async runODataQuery(path: string, signal?: AbortSignal): Promise<unknown> {
     const token = await this.getToken()
     const cleaned = path.replace(/^\/+/, '')
     const url = joinUrl(this.creds.instanceUrl, `/server/odata/${cleaned}`)
     const res = await this.http.send({
       method: 'GET',
       url,
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal
     })
     if (res.status === 401) {
       this.invalidateToken()

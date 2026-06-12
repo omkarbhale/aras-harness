@@ -24,17 +24,24 @@ export const llmConfigSchema = z.object({
 })
 export type LlmConfig = z.infer<typeof llmConfigSchema>
 
+export const agentConfigSchema = z.object({
+  toolTimeoutSec: z.number().int().min(5).max(300).default(30)
+})
+export type AgentConfig = z.infer<typeof agentConfigSchema>
+
 export const appConfigSchema = z.object({
   connections: z.array(connectionRecordSchema).default([]),
   activeConnectionId: z.string().nullable().default(null),
-  llm: llmConfigSchema.nullable().default(null)
+  llm: llmConfigSchema.nullable().default(null),
+  agent: agentConfigSchema.default({ toolTimeoutSec: 30 })
 })
 export type AppConfig = z.infer<typeof appConfigSchema>
 
 export const defaultAppConfig: AppConfig = {
   connections: [],
   activeConnectionId: null,
-  llm: null
+  llm: null,
+  agent: { toolTimeoutSec: 30 }
 }
 
 /** Parse loosely-typed persisted data, falling back to defaults on corruption. */

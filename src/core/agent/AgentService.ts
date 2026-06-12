@@ -34,6 +34,7 @@ export class AgentService {
   private readonly threadId = `thread-${globalThis.crypto.randomUUID()}`
   private readonly pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
   private started = false
+  private currentAC: AbortController | undefined
 
   constructor(model: BaseChatModel, tools: StructuredToolInterface[]) {
     this.agent = createReactAgent({
@@ -43,8 +44,21 @@ export class AgentService {
     })
   }
 
+  /** AbortSignal for the currently running turn (tools use this for retry / fetch abort). */
+  getCurrentSignal(): AbortSignal | undefined {
+    return this.currentAC?.signal
+  }
+
+  /** Abort the current run. Safe to call when idle. */
+  cancel(): void {
+    this.currentAC?.abort()
+  }
+
   /** Run one user message to completion (handling any approval pauses), emitting events. */
   async run(runId: string, message: string, emit: (event: AgentEvent) => void): Promise<void> {
+    const ac = new AbortController()
+    this.currentAC = ac
+
     emit({ type: 'run_start', runId })
     const config = { configurable: { thread_id: this.threadId } }
 
@@ -58,14 +72,20 @@ export class AgentService {
       // Stream; each time the graph interrupts for approval, wait then resume.
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        const end = await this.streamTurn(runId, next, config, emit)
+        const end = await this.streamTurn(runId, next, config, ac.signal, emit)
         if (!end) break
-        const decision = await this.awaitApproval(end.interruptedApprovalId)
+        const decision = await this.awaitApproval(end.interruptedApprovalId, ac.signal)
         next = new Command({ resume: decision })
       }
       emit({ type: 'done', runId })
     } catch (error) {
-      emit({ type: 'error', runId, message: toMessage(error) })
+      if (ac.signal.aborted) {
+        emit({ type: 'done', runId })
+      } else {
+        emit({ type: 'error', runId, message: toMessage(error) })
+      }
+    } finally {
+      if (this.currentAC === ac) this.currentAC = undefined
     }
   }
 
@@ -78,19 +98,26 @@ export class AgentService {
     }
   }
 
-  private awaitApproval(approvalId: string): Promise<ApprovalDecision> {
-    return new Promise((resolve) => this.pendingApprovals.set(approvalId, resolve))
+  private awaitApproval(approvalId: string, signal: AbortSignal): Promise<ApprovalDecision> {
+    return new Promise((resolve, reject) => {
+      this.pendingApprovals.set(approvalId, resolve)
+      signal.addEventListener('abort', () => {
+        this.pendingApprovals.delete(approvalId)
+        reject(new Error('Cancelled'))
+      }, { once: true })
+    })
   }
 
   private async streamTurn(
     runId: string,
     input: unknown,
     config: { configurable: { thread_id: string } },
+    signal: AbortSignal,
     emit: (event: AgentEvent) => void
   ): Promise<TurnEnd> {
     const stream = await this.agent.stream(
       input as Parameters<(typeof this.agent)['stream']>[0],
-      { ...config, streamMode: ['updates', 'messages'] }
+      { ...config, signal, streamMode: ['updates', 'messages'] }
     )
 
     let end: TurnEnd = null

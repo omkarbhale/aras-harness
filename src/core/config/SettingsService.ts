@@ -1,4 +1,6 @@
 import type {
+  AgentSettings,
+  AgentSettingsInput,
   Connection,
   ConnectionInput,
   LlmSettings,
@@ -6,6 +8,7 @@ import type {
 } from '@shared/ipc'
 import type { ArasCredentials } from '../aras'
 import {
+  agentConfigSchema,
   connectionRecordSchema,
   llmConfigSchema,
   secretKeys,
@@ -127,6 +130,19 @@ export class SettingsService {
 
   getLlmApiKey(provider: string): string | null {
     return this.secrets.get(secretKeys.llmApiKey(provider))
+  }
+
+  // -- Agent settings -------------------------------------------------------
+
+  getAgentSettings(): AgentSettings {
+    return { toolTimeoutSec: this.config.load().agent.toolTimeoutSec }
+  }
+
+  saveAgentSettings(input: AgentSettingsInput): AgentSettings {
+    const cfg = this.config.load()
+    cfg.agent = agentConfigSchema.parse({ toolTimeoutSec: input.toolTimeoutSec })
+    this.config.save(cfg)
+    return { toolTimeoutSec: cfg.agent.toolTimeoutSec }
   }
 
   // -- helpers --------------------------------------------------------------

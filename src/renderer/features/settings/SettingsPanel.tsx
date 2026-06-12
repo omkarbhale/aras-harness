@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { LlmProviderId, LlmSettings } from '@shared/ipc'
+import type { AgentSettings, LlmProviderId, LlmSettings } from '@shared/ipc'
 
 const MODEL_SUGGESTIONS: Record<LlmProviderId, string[]> = {
   anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
@@ -14,6 +14,8 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
   const [apiKey, setApiKey] = useState('')
   const [current, setCurrent] = useState<LlmSettings | null>(null)
   const [saved, setSaved] = useState(false)
+  const [toolTimeoutSec, setToolTimeoutSec] = useState(30)
+  const [agentSaved, setAgentSaved] = useState(false)
 
   useEffect(() => {
     void window.api.settings.getLlm().then((s) => {
@@ -22,6 +24,9 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
       setProvider(s.provider)
       setModel(s.model)
       setBaseUrl(s.baseUrl ?? '')
+    })
+    void window.api.settings.getAgent().then((s: AgentSettings) => {
+      setToolTimeoutSec(s.toolTimeoutSec)
     })
   }, [])
 
@@ -37,6 +42,13 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
     setSaved(true)
     onChanged()
     setTimeout(() => setSaved(false), 1500)
+  }
+
+  const saveAgent = async (): Promise<void> => {
+    await window.api.settings.saveAgent({ toolTimeoutSec })
+    setAgentSaved(true)
+    onChanged()
+    setTimeout(() => setAgentSaved(false), 1500)
   }
 
   const needsKey = provider === 'anthropic' || provider === 'openai'
@@ -104,6 +116,26 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
       <p className="muted">
         Keys are encrypted at rest with your OS keychain and never leave the main process.
       </p>
+
+      <h2>Agent Settings</h2>
+      <div className="card">
+        <label>Tool timeout (seconds)</label>
+        <input
+          type="number"
+          min={5}
+          max={300}
+          value={toolTimeoutSec}
+          onChange={(e) => setToolTimeoutSec(Number(e.target.value))}
+        />
+        <p className="muted" style={{ marginTop: 4 }}>
+          Max time per tool call before the agent reports a timeout error. Each read tool retries
+          with exponential backoff (2 s → 4 s → 8 s …) until it succeeds or you press Stop.
+        </p>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button onClick={() => void saveAgent()}>Save</button>
+          {agentSaved && <span className="pill green">Saved</span>}
+        </div>
+      </div>
     </div>
   )
 }

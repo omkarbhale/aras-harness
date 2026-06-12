@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   IpcChannels,
   type AgentEvent,
+  type AgentSettings,
+  type AgentSettingsInput,
   type Connection,
   type ConnectionInput,
   type HarnessApi,
@@ -26,7 +28,10 @@ const api: HarnessApi = {
   settings: {
     getLlm: () => ipcRenderer.invoke(IpcChannels.settingsGetLlm) as Promise<LlmSettings | null>,
     saveLlm: (input: LlmSettingsInput) =>
-      ipcRenderer.invoke(IpcChannels.settingsSaveLlm, input) as Promise<LlmSettings>
+      ipcRenderer.invoke(IpcChannels.settingsSaveLlm, input) as Promise<LlmSettings>,
+    getAgent: () => ipcRenderer.invoke(IpcChannels.settingsGetAgent) as Promise<AgentSettings>,
+    saveAgent: (input: AgentSettingsInput) =>
+      ipcRenderer.invoke(IpcChannels.settingsSaveAgent, input) as Promise<AgentSettings>
   },
   query: {
     runAml: (body: string) => ipcRenderer.invoke(IpcChannels.queryRunAml, body) as Promise<AmlResult>
@@ -36,6 +41,8 @@ const api: HarnessApi = {
       ipcRenderer.invoke(IpcChannels.agentSend, message) as Promise<{ runId: string }>,
     approve: (approvalId: string, approved: boolean) =>
       ipcRenderer.invoke(IpcChannels.agentApprove, { approvalId, approved }) as Promise<void>,
+    cancel: (_runId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentCancel) as Promise<void>,
     onEvent: (cb: (event: AgentEvent) => void) => {
       const listener = (_e: unknown, event: AgentEvent): void => cb(event)
       ipcRenderer.on(IpcChannels.agentEvent, listener)

@@ -9,6 +9,7 @@ export interface HttpRequest {
   url: string
   headers?: Record<string, string>
   body?: string
+  signal?: AbortSignal
 }
 
 export interface HttpResponse {
@@ -26,7 +27,8 @@ export class FetchHttpClient implements HttpClient {
     const res = await fetch(req.url, {
       method: req.method,
       headers: req.headers,
-      body: req.body
+      body: req.body,
+      signal: req.signal
     })
     const text = await res.text()
     const headers: Record<string, string> = {}
@@ -35,6 +37,33 @@ export class FetchHttpClient implements HttpClient {
     })
     return { status: res.status, headers, text }
   }
+}
+
+/**
+ * Retry `fn` indefinitely with exponential backoff (2 s, 4 s, 8 s, …) on any thrown
+ * error. Pass `signal` to abort mid-sleep so the caller's cancellation propagates.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  let delayMs = 2000
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (signal?.aborted) throw err
+      await sleep(delayMs, signal)
+      delayMs *= 2
+    }
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(resolve, ms)
+    if (signal) {
+      signal.addEventListener('abort', () => { clearTimeout(id); reject(new Error('Cancelled')) }, { once: true })
+    }
+  })
 }
 
 /** Join a base instance URL with a path, normalizing slashes. */

@@ -2,6 +2,7 @@ import { tool } from '@langchain/core/tools'
 import { interrupt } from '@langchain/langgraph'
 import { z } from 'zod'
 import type { ArasClient } from '../aras'
+import { withRetry } from '../aras/http'
 import { isWriteAml, summarizeAml } from './amlIntrospection'
 
 /** Decision passed back into the graph when resuming an approval interrupt. */
@@ -21,11 +22,23 @@ export interface ApprovalRequest {
 export interface AgentToolDeps {
   /** Returns the client for the active connection, or throws a readable error. */
   getClient: () => ArasClient
+  /** Returns the AbortSignal for the current run, if any. */
+  getSignal?: () => AbortSignal | undefined
+  /** Tool execution timeout in milliseconds (default 30 000). */
+  toolTimeoutMs?: number
   /** Id generator (injectable for tests). */
   genId?: () => string
 }
 
 const MAX_ITEMS_IN_RESULT = 50
+
+function withTimeout<T>(promise: Promise<T>, ms: number, toolName: string): Promise<T> {
+  let id: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    id = setTimeout(() => reject(new Error(`${toolName} timed out after ${ms / 1000}s`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(id))
+}
 
 function summarizeResult(items: { id: string; type: string; properties: Record<string, string> }[]): string {
   const truncated = items.slice(0, MAX_ITEMS_IN_RESULT)
@@ -43,6 +56,8 @@ function summarizeResult(items: { id: string; type: string; properties: Record<s
  */
 export function createArasTools(deps: AgentToolDeps) {
   const genId = deps.genId ?? (() => globalThis.crypto.randomUUID())
+  const timeoutMs = deps.toolTimeoutMs ?? 30_000
+  const sig = () => deps.getSignal?.()
 
   const runAml = tool(
     async ({ aml }: { aml: string }) => {
@@ -59,8 +74,16 @@ export function createArasTools(deps: AgentToolDeps) {
         if (!decision?.approved) {
           return 'The user did NOT approve this write. The AML was not executed.'
         }
+        // Approved write — run once, no retry (avoid duplicate mutations).
+        const result = await withTimeout(deps.getClient().runAml(aml, sig()), timeoutMs, 'run_aml')
+        return summarizeResult(result.items)
       }
-      const result = await deps.getClient().runAml(aml)
+      // Read query — retry with backoff until success or cancellation.
+      const result = await withTimeout(
+        withRetry(() => deps.getClient().runAml(aml, sig()), sig()),
+        timeoutMs,
+        'run_aml'
+      )
       return summarizeResult(result.items)
     },
     {
@@ -77,7 +100,11 @@ export function createArasTools(deps: AgentToolDeps) {
 
   const runOData = tool(
     async ({ query }: { query: string }) => {
-      const result = await deps.getClient().runODataQuery(query)
+      const result = await withTimeout(
+        withRetry(() => deps.getClient().runODataQuery(query, sig()), sig()),
+        timeoutMs,
+        'run_odata_query'
+      )
       return JSON.stringify(result).slice(0, 8000)
     },
     {
@@ -93,9 +120,17 @@ export function createArasTools(deps: AgentToolDeps) {
 
   const listItemTypes = tool(
     async () => {
-      const result = await deps
-        .getClient()
-        .runAml('<AML><Item type="ItemType" action="get" select="name,label" orderBy="name" /></AML>')
+      const result = await withTimeout(
+        withRetry(
+          () => deps.getClient().runAml(
+            '<AML><Item type="ItemType" action="get" select="name,label" orderBy="name" /></AML>',
+            sig()
+          ),
+          sig()
+        ),
+        timeoutMs,
+        'list_itemtypes'
+      )
       const names = result.items.map((i) => i.properties.name).filter(Boolean)
       return JSON.stringify({ count: names.length, itemTypes: names })
     },
@@ -113,7 +148,11 @@ export function createArasTools(deps: AgentToolDeps) {
         `<name>${name}</name>` +
         `<Relationships><Item type="Property" action="get" select="name,label,data_type,data_source" /></Relationships>` +
         `</Item></AML>`
-      const result = await deps.getClient().runAml(aml)
+      const result = await withTimeout(
+        withRetry(() => deps.getClient().runAml(aml, sig()), sig()),
+        timeoutMs,
+        'introspect_itemtype'
+      )
       return summarizeResult(result.items)
     },
     {
@@ -130,7 +169,11 @@ export function createArasTools(deps: AgentToolDeps) {
       const aml =
         `<AML><Item type="Method" action="get" select="name,method_type,method_code">` +
         `<name>${name}</name></Item></AML>`
-      const result = await deps.getClient().runAml(aml)
+      const result = await withTimeout(
+        withRetry(() => deps.getClient().runAml(aml, sig()), sig()),
+        timeoutMs,
+        'get_method_source'
+      )
       if (result.count === 0) return `No Method named "${name}" was found.`
       return summarizeResult(result.items)
     },

@@ -3,6 +3,8 @@ import { ipcMain } from 'electron'
 import {
   IpcChannels,
   type AgentEvent,
+  type AgentSettings,
+  type AgentSettingsInput,
   type Connection,
   type ConnectionInput,
   type LlmSettings,
@@ -64,6 +66,16 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
     return dto
   })
 
+  ipcMain.handle(IpcChannels.settingsGetAgent, (): AgentSettings =>
+    services.settings.getAgentSettings()
+  )
+
+  ipcMain.handle(IpcChannels.settingsSaveAgent, (_e, input: AgentSettingsInput): AgentSettings => {
+    const dto = services.settings.saveAgentSettings(input)
+    services.invalidateAgent()
+    return dto
+  })
+
   // -- Manual query -------------------------------------------------------
   ipcMain.handle(IpcChannels.queryRunAml, (_e, body: string) =>
     services.getActiveClient().runAml(body)
@@ -91,4 +103,8 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
       services.peekAgent()?.provideApproval(input.approvalId, input.approved)
     }
   )
+
+  ipcMain.handle(IpcChannels.agentCancel, (): void => {
+    services.cancelCurrentRun()
+  })
 }
