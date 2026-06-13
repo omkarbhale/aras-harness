@@ -63,10 +63,10 @@ export interface ConfigStore {
 }
 
 export interface SecretStore {
-  get(key: string): string | null
-  set(key: string, value: string): void
-  delete(key: string): void
-  has(key: string): boolean
+  get(key: string): Promise<string | null>
+  set(key: string, value: string): Promise<void>
+  delete(key: string): Promise<void>
+  has(key: string): Promise<boolean>
 }
 
 /** Stable secret-key conventions so all callers agree on where secrets live. */

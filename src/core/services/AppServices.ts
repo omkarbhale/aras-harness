@@ -51,12 +51,12 @@ export class AppServices {
   }
 
   /** ArasClient for the active connection. Throws a readable error if not configured. */
-  getActiveClient(): ArasClient {
+  async getActiveClient(): Promise<ArasClient> {
     const id = this.settings.getActiveConnectionId()
     if (!id) throw new Error('No active Aras connection. Add and select a connection first.')
     if (this.activeClient?.id === id) return this.activeClient.client
 
-    const creds = this.settings.getConnectionCredentials(id)
+    const creds = await this.settings.getConnectionCredentials(id)
     if (!creds) throw new Error('The active connection is missing a stored password.')
     const client = new ArasClient(creds)
     this.activeClient = { id, client }
@@ -64,19 +64,19 @@ export class AppServices {
   }
 
   /** Build a throwaway client for a connection (used by "Test connection"). */
-  buildClientFor(id: string): ArasClient {
-    const creds = this.settings.getConnectionCredentials(id)
+  async buildClientFor(id: string): Promise<ArasClient> {
+    const creds = await this.settings.getConnectionCredentials(id)
     if (!creds) throw new Error('This connection has no stored password.')
     return new ArasClient(creds)
   }
 
   /** Lazily build the agent from the configured LLM provider + Aras tools. */
-  getOrCreateAgent(): AgentService {
+  async getOrCreateAgent(): Promise<AgentService> {
     if (this.agent) return this.agent
 
-    const llm = this.settings.getLlmSettings()
+    const llm = await this.settings.getLlmSettings()
     if (!llm) throw new Error('No LLM provider configured. Set one in Settings first.')
-    const apiKey = this.settings.getLlmApiKey(llm.provider) ?? undefined
+    const apiKey = (await this.settings.getLlmApiKey(llm.provider)) ?? undefined
     const model = createChatModel(
       { provider: llm.provider, model: llm.model, ...(llm.baseUrl ? { baseUrl: llm.baseUrl } : {}) },
       apiKey

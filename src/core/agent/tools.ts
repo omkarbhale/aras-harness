@@ -21,7 +21,7 @@ export interface ApprovalRequest {
 
 export interface AgentToolDeps {
   /** Returns the client for the active connection, or throws a readable error. */
-  getClient: () => ArasClient
+  getClient: () => Promise<ArasClient> | ArasClient
   /** Returns the AbortSignal for the current run, if any. */
   getSignal?: () => AbortSignal | undefined
   /** Tool execution timeout in milliseconds (default 30 000). */
@@ -60,6 +60,7 @@ export function createArasTools(deps: AgentToolDeps) {
   const genId = deps.genId ?? (() => globalThis.crypto.randomUUID())
   const timeoutMs = deps.toolTimeoutMs ?? 30_000
   const sig = () => deps.getSignal?.()
+  const client = (): Promise<ArasClient> => Promise.resolve(deps.getClient())
   const retry = <T>(fn: () => Promise<T>): Promise<T> =>
     withRetry(
       fn,
@@ -83,12 +84,12 @@ export function createArasTools(deps: AgentToolDeps) {
           return 'The user did NOT approve this write. The AML was not executed.'
         }
         // Approved write — run once, no retry (avoid duplicate mutations).
-        const result = await withTimeout(deps.getClient().runAml(aml, sig()), timeoutMs, 'run_aml')
+        const result = await withTimeout((await client()).runAml(aml, sig()), timeoutMs, 'run_aml')
         return summarizeResult(result.items)
       }
       // Read query — retry with backoff until success or cancellation (cap optional).
       const result = await withTimeout(
-        retry(() => deps.getClient().runAml(aml, sig())),
+        retry(async () => (await client()).runAml(aml, sig())),
         timeoutMs,
         'run_aml'
       )
@@ -109,7 +110,7 @@ export function createArasTools(deps: AgentToolDeps) {
   const runOData = tool(
     async ({ query }: { query: string }) => {
       const result = await withTimeout(
-        retry(() => deps.getClient().runODataQuery(query, sig())),
+        retry(async () => (await client()).runODataQuery(query, sig())),
         timeoutMs,
         'run_odata_query'
       )
@@ -129,8 +130,8 @@ export function createArasTools(deps: AgentToolDeps) {
   const listItemTypes = tool(
     async () => {
       const result = await withTimeout(
-        retry(() =>
-          deps.getClient().runAml(
+        retry(async () =>
+          (await client()).runAml(
             '<AML><Item type="ItemType" action="get" select="name,label" orderBy="name" /></AML>',
             sig()
           )
@@ -156,7 +157,7 @@ export function createArasTools(deps: AgentToolDeps) {
         `<Relationships><Item type="Property" action="get" select="name,label,data_type,data_source" /></Relationships>` +
         `</Item></AML>`
       const result = await withTimeout(
-        retry(() => deps.getClient().runAml(aml, sig())),
+        retry(async () => (await client()).runAml(aml, sig())),
         timeoutMs,
         'introspect_itemtype'
       )
@@ -177,7 +178,7 @@ export function createArasTools(deps: AgentToolDeps) {
         `<AML><Item type="Method" action="get" select="name,method_type,method_code">` +
         `<name>${name}</name></Item></AML>`
       const result = await withTimeout(
-        retry(() => deps.getClient().runAml(aml, sig())),
+        retry(async () => (await client()).runAml(aml, sig())),
         timeoutMs,
         'get_method_source'
       )

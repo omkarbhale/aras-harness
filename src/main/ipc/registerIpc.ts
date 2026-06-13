@@ -14,7 +14,7 @@ import {
   type TestResult,
   type ThreadSummary
 } from '@shared/ipc'
-import type { AppServices } from '../services/AppServices'
+import type { AppServices } from '@core/services'
 import { InProcessApprovalBus } from './InProcessApprovalBus'
 
 const DEFAULT_THREAD_NAME = 'New chat'
@@ -35,16 +35,22 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
   const activeRuns = new Map<string, AbortController>()
 
   // -- Connections --------------------------------------------------------
-  ipcMain.handle(IpcChannels.connectionsList, (): Connection[] => services.settings.listConnections())
+  ipcMain.handle(
+    IpcChannels.connectionsList,
+    (): Promise<Connection[]> => services.settings.listConnections()
+  )
 
-  ipcMain.handle(IpcChannels.connectionsSave, (_e, input: ConnectionInput): Connection => {
-    const dto = services.settings.saveConnection(input)
-    services.invalidateConnection()
-    return dto
-  })
+  ipcMain.handle(
+    IpcChannels.connectionsSave,
+    async (_e, input: ConnectionInput): Promise<Connection> => {
+      const dto = await services.settings.saveConnection(input)
+      services.invalidateConnection()
+      return dto
+    }
+  )
 
-  ipcMain.handle(IpcChannels.connectionsDelete, (_e, id: string): void => {
-    services.settings.deleteConnection(id)
+  ipcMain.handle(IpcChannels.connectionsDelete, async (_e, id: string): Promise<void> => {
+    await services.settings.deleteConnection(id)
     services.invalidateConnection()
   })
 
@@ -59,7 +65,8 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
 
   ipcMain.handle(IpcChannels.connectionsTest, async (_e, id: string): Promise<TestResult> => {
     try {
-      const { latencyMs } = await services.buildClientFor(id).testConnection()
+      const client = await services.buildClientFor(id)
+      const { latencyMs } = await client.testConnection()
       return { ok: true, message: 'Connected successfully.', latencyMs }
     } catch (error) {
       return { ok: false, message: errorMessage(error) }
@@ -67,15 +74,19 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
   })
 
   // -- LLM settings -------------------------------------------------------
-  ipcMain.handle(IpcChannels.settingsGetLlm, (): LlmSettings | null =>
-    services.settings.getLlmSettings()
+  ipcMain.handle(
+    IpcChannels.settingsGetLlm,
+    (): Promise<LlmSettings | null> => services.settings.getLlmSettings()
   )
 
-  ipcMain.handle(IpcChannels.settingsSaveLlm, (_e, input: LlmSettingsInput): LlmSettings => {
-    const dto = services.settings.saveLlmSettings(input)
-    services.invalidateAgent()
-    return dto
-  })
+  ipcMain.handle(
+    IpcChannels.settingsSaveLlm,
+    async (_e, input: LlmSettingsInput): Promise<LlmSettings> => {
+      const dto = await services.settings.saveLlmSettings(input)
+      services.invalidateAgent()
+      return dto
+    }
+  )
 
   ipcMain.handle(IpcChannels.settingsGetAgent, (): AgentSettings =>
     services.settings.getAgentSettings()
@@ -88,9 +99,10 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
   })
 
   // -- Manual query -------------------------------------------------------
-  ipcMain.handle(IpcChannels.queryRunAml, (_e, body: string) =>
-    services.getActiveClient().runAml(body)
-  )
+  ipcMain.handle(IpcChannels.queryRunAml, async (_e, body: string) => {
+    const client = await services.getActiveClient()
+    return client.runAml(body)
+  })
 
   // -- Threads ------------------------------------------------------------
   ipcMain.handle(IpcChannels.threadsList, (): ThreadSummary[] =>
@@ -212,7 +224,7 @@ async function driveAgentRun(input: DriveRunInput): Promise<void> {
   emit({ type: 'run_start', runId })
   emit({ type: 'user_message', runId, content: message })
   try {
-    const agent = services.getOrCreateAgent()
+    const agent = await services.getOrCreateAgent()
     let next: HumanMessage | Command = new HumanMessage(message)
     // eslint-disable-next-line no-constant-condition
     while (true) {
