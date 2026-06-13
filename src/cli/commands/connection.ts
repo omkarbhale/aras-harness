@@ -6,6 +6,10 @@ import { fail } from '../exit'
 /**
  * `aras connection ...` — CRUD over Aras connections, set-active, test.
  * Passwords come from stdin only (never argv) so they don't end up in shell history.
+ *
+ * Commands that take `<id-or-name>` accept either the UUID id or a unique connection
+ * name — names are what humans remember, so making them work is the kinder default.
+ * Ambiguity (two connections sharing a name) falls back to requiring the id.
  */
 export function connectionCommand(services: AppServices): Command {
   const cmd = new Command('connection').description('Manage Aras Innovator connections')
@@ -57,10 +61,11 @@ export function connectionCommand(services: AppServices): Command {
     })
 
   cmd
-    .command('remove <id>')
+    .command('remove <idOrName>')
     .description('Delete a connection (and its stored password)')
-    .action(async (id: string) => {
+    .action(async (ref: string) => {
       try {
+        const id = await resolveConnectionRef(services, ref)
         await services.settings.deleteConnection(id)
       } catch (e) {
         fail(e)
@@ -68,10 +73,11 @@ export function connectionCommand(services: AppServices): Command {
     })
 
   cmd
-    .command('set-active <id>')
+    .command('set-active <idOrName>')
     .description('Mark a connection as the active one')
-    .action((id: string) => {
+    .action(async (ref: string) => {
       try {
+        const id = await resolveConnectionRef(services, ref)
         services.settings.setActiveConnection(id)
       } catch (e) {
         fail(e)
@@ -87,10 +93,11 @@ export function connectionCommand(services: AppServices): Command {
     })
 
   cmd
-    .command('test <id>')
+    .command('test <idOrName>')
     .description('Test that a connection can authenticate against its Aras instance')
-    .action(async (id: string) => {
+    .action(async (ref: string) => {
       try {
+        const id = await resolveConnectionRef(services, ref)
         const client = await services.buildClientFor(id)
         const { latencyMs } = await client.testConnection()
         process.stdout.write(`ok (${latencyMs} ms)\n`)
@@ -100,4 +107,20 @@ export function connectionCommand(services: AppServices): Command {
     })
 
   return cmd
+}
+
+/** Resolve a CLI-provided ref to a connection id: exact id match, else unique name match. */
+async function resolveConnectionRef(services: AppServices, ref: string): Promise<string> {
+  const list = await services.settings.listConnections()
+  const byId = list.find((c) => c.id === ref)
+  if (byId) return byId.id
+  const byName = list.filter((c) => c.name === ref)
+  if (byName.length === 1) return byName[0]!.id
+  if (byName.length > 1) {
+    throw new Error(
+      `Multiple connections named "${ref}". Disambiguate by id:\n` +
+        byName.map((c) => `  ${c.id}`).join('\n')
+    )
+  }
+  throw new Error(`Unknown connection "${ref}". Run \`aras connection list\` to see ids.`)
 }

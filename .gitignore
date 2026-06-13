@@ -6,3 +6,8 @@ dist/
 .DS_Store
 .env
 .env.local
+
+# Local scratch / smoke-test scripts that may carry per-developer URLs or hostnames.
+*.ps1
+*.local.*
+scratch/
