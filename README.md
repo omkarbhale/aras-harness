@@ -1,65 +1,71 @@
 # Aras Harness
 
-An agentic developer harness for **Aras Innovator** — conceptually a coding agent (like
-Claude Code), but for AML/OData. An LLM agent reasons about your intent and accomplishes
-it by calling tools against a **live Aras instance** (run AML, introspect schema, read
-method source), with a **human approval gate** before any write. A manual AML query pane
-sits alongside the chat.
+Two front-ends, one backend. A LangGraph agent that reasons about your intent and accomplishes it against a **live Aras Innovator** instance through tools — AML execution, schema introspection, method-source lookup — with a **human approval gate** before any write.
+
+- **Electron desktop app** — chat, transcript history, manual AML query pane.
+- **`aras` CLI** — same backend, callable from PowerShell / bash by a human or by an external LLM. Stateless per shell call; conversation state persists to disk.
+
+Both surfaces share the same domain logic (`src/core/`), the same sqlite-backed state, the same event-sourced transcript.
 
 ## Stack
 
-- **Electron** (security-first: `contextIsolation`, `sandbox`, no `nodeIntegration`)
-- **LangGraph.js** (`createReactAgent` + `interrupt()` for approvals + checkpointing)
-- **TypeScript** (strict), **React**, **Vite** (via `electron-vite`)
-- Multi-provider LLM: **Anthropic / OpenAI / Ollama** (configurable, your keys)
+- **Electron** (security-first: `contextIsolation`, `sandbox`, no `nodeIntegration`) for the desktop UI
+- **LangGraph.js** — `createReactAgent`, `interrupt()` for approvals, sqlite checkpointer
+- **TypeScript** strict, **React**, **Vite** (`electron-vite`)
+- **Commander** + **tsup** for the CLI; **keytar** for OS keychain on CLI; Electron `safeStorage` for the renderer
+- **better-sqlite3** for state persistence (threads, runs, agent events, LangGraph checkpoints)
+- Multi-provider LLM: **Anthropic / OpenAI / Ollama**
 
-## Architecture
+## Quickstart — desktop
 
-The domain logic lives in `src/core/` and is **framework-agnostic** — no Electron, no
-React — so it is unit-tested in isolation and can be reused behind any UI or transport.
-
-```
-src/
-  shared/   IPC contract (DTOs + AgentEvent union) — imported by both processes
-  core/     domain logic (no Electron/React)
-    aras/   ArasClient (OAuth + REST/OData), AML parser  — the only Aras-aware code
-    llm/    createChatModel() factory over LangChain BaseChatModel
-    agent/  AgentService (LangGraph), ToolRegistry, tools, write-approval gate
-    config/ zod settings schema + SettingsService (secret-free DTOs)
-  main/     Electron lifecycle, IPC handlers, electron-store/safeStorage adapters
-  preload/  contextBridge typed `window.api`
-  renderer/ React UI: features/{chat,query,connections,settings}
+```bash
+npm install
+npm run dev         # launches Electron with HMR
 ```
 
-Dependency rule: `renderer → shared`, `main → core + shared`, `core → nothing app-specific`.
+Then in the app: **Connections** → add your Aras instance and Test → **Settings** → pick an LLM + API key → **Agent** → ask away. **Query** runs raw AML against the active connection.
+
+## Quickstart — CLI
+
+```bash
+npm run build:cli                    # tsup → dist/cli/index.js (~80 KB CJS)
+node dist/cli/index.js --help        # or `npm link` then plain `aras --help`
+
+# One-time setup (separate store from the desktop app, see docs/ARCHITECTURE.md):
+"my-aras-password" | aras connection add --name dev \
+  --url "http://host/InnovatorServer" --db "InnovatorSolutions" --user admin --password-stdin
+aras connection set-active dev
+"sk-..." | aras settings llm set --provider openai --model gpt-4o-mini --api-key-stdin
+
+# Drive the agent:
+aras agent send "List 5 Part item_numbers."
+```
+
+Full CLI reference: [docs/CLI.md](docs/CLI.md).
+
+## Documentation
+
+- **[docs/CLI.md](docs/CLI.md)** — every command, every flag, every exit code, scripted-usage patterns
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — code layout, layering rules, how the two front-ends share core, the agent + approval flow in detail, persistence schema
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — what's intentionally not built yet and what the design leaves room for
 
 ## Develop
 
 ```bash
 npm install
-npm run dev         # launch the app (electron-vite)
-npm test            # core unit tests (no Aras/LLM needed)
-npm run typecheck   # tsc for node + web projects
-npm run build       # production bundle
+npm run dev         # Electron app with HMR
+npm test            # core unit tests — no Aras, no LLM required
+npm run typecheck   # tsc -p tsconfig.node.json && tsconfig.web.json
+npm run build       # production Electron bundle
+npm run build:cli   # CLI bundle (CJS, node20 target)
 ```
 
-## End-to-end usage
-
-1. **Connections** tab → add your Aras instance (URL, database, user, password) → **Test**.
-   Auth uses the modern OAuth flow (Aras 12 / 2024 / 29): discovery → password grant → bearer token.
-2. **Settings** tab → pick an LLM provider/model and enter your API key (stored encrypted
-   via the OS keychain).
-3. **Agent** tab → ask e.g. *"List the 10 most recently created Parts"*. Watch the agent
-   introspect the schema, run AML, and stream its answer. A write request (e.g. *"Add a
-   Part TEST-001"*) pauses for your **Approve / Deny**.
-4. **Query** tab → run raw AML against the active connection and view results in a grid.
+Native bindings: `better-sqlite3` is rebuilt automatically by `npm run dev` / `npm test` / `npm run cli` to match the right ABI (Electron's vs host Node's). If you bounce between surfaces, expect a one-second rebuild step.
 
 ## Security
 
-Credentials and API keys live only in the main process, encrypted at rest with Electron
-`safeStorage`. The renderer receives secret-free DTOs and a narrow, typed IPC surface.
-
-## Roadmap (architecture leaves room for)
-
-Monaco editor + AML IntelliSense · MCP tool loading (`@langchain/mcp-adapters` merges into
-`ToolRegistry`) · method authoring/deploy · export/import & diff · conversation history.
+- Connection passwords and LLM API keys never reach the renderer process and are never accepted on argv.
+  - **Desktop:** encrypted at rest via Electron `safeStorage` (DPAPI on Windows, Keychain on macOS).
+  - **CLI:** OS keychain via `keytar` (Windows Credential Manager / macOS Keychain / libsecret).
+- All writes to Aras pause for explicit approval (UI modal in the desktop app; exit-code-10 in the CLI).
+- Renderer ↔ main IPC is a narrow, typed contract (`src/shared/ipc.ts`).
