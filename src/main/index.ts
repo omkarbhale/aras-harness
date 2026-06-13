@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
 import type { AgentEvent } from '@shared/ipc'
 import { IpcChannels } from '@shared/ipc'
-import { AppServices } from './services/AppServices'
+import { buildElectronServices } from './services/buildElectronServices'
 import { registerIpc } from './ipc/registerIpc'
 
 let mainWindow: BrowserWindow | null = null
@@ -39,7 +39,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  const services = new AppServices()
+  const services = buildElectronServices()
 
   const sendEvent = (event: AgentEvent): void => {
     mainWindow?.webContents.send(IpcChannels.agentEvent, event)

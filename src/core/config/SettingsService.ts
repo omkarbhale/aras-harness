@@ -135,14 +135,33 @@ export class SettingsService {
   // -- Agent settings -------------------------------------------------------
 
   getAgentSettings(): AgentSettings {
-    return { toolTimeoutSec: this.config.load().agent.toolTimeoutSec }
+    const a = this.config.load().agent
+    return {
+      toolTimeoutSec: a.toolTimeoutSec,
+      ...(a.maxRetryAttempts !== undefined ? { maxRetryAttempts: a.maxRetryAttempts } : {})
+    }
   }
 
   saveAgentSettings(input: AgentSettingsInput): AgentSettings {
     const cfg = this.config.load()
-    cfg.agent = agentConfigSchema.parse({ toolTimeoutSec: input.toolTimeoutSec })
+    cfg.agent = agentConfigSchema.parse({
+      toolTimeoutSec: input.toolTimeoutSec,
+      ...(input.maxRetryAttempts !== undefined ? { maxRetryAttempts: input.maxRetryAttempts } : {})
+    })
     this.config.save(cfg)
-    return { toolTimeoutSec: cfg.agent.toolTimeoutSec }
+    return this.getAgentSettings()
+  }
+
+  // -- Thread id (phase 1: a single default thread) -------------------------
+
+  /** Returns the persisted thread id, generating + saving one if absent. */
+  getOrCreateActiveThreadId(): string {
+    const cfg = this.config.load()
+    if (cfg.activeThreadId) return cfg.activeThreadId
+    const id = this.genId()
+    cfg.activeThreadId = id
+    this.config.save(cfg)
+    return id
   }
 
   // -- helpers --------------------------------------------------------------

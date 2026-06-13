@@ -1,24 +1,43 @@
+import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
 import { SettingsService } from '@core/config'
 import { ArasClient } from '@core/aras'
 import { createChatModel } from '@core/llm'
 import { AgentService, ToolRegistry, createArasTools } from '@core/agent'
-import { ElectronConfigStore } from '../store/ElectronConfigStore'
-import { SafeStorageSecretStore } from '../store/SafeStorageSecretStore'
+import type { AgentEventLog } from '@core/agent/eventLog'
+import type { SqliteThreadStore } from '@core/persistence/sqlite/SqliteThreadStore'
+import type { SqliteRunStore } from '@core/persistence/sqlite/SqliteRunStore'
 
 /**
- * Composition root for the main process. Owns the singletons, builds the active
- * ArasClient and the AgentService lazily, and rebuilds them when configuration changes.
+ * Dependencies injected by the front-end wiring (Electron's buildElectronServices,
+ * or — later — the CLI's buildCliServices). AppServices itself touches no framework.
+ */
+export interface AppServicesDeps {
+  settings: SettingsService
+  checkpointer: BaseCheckpointSaver
+  threadStore: SqliteThreadStore
+  runStore: SqliteRunStore
+  eventLog: AgentEventLog
+}
+
+/**
+ * Composition root. Owns the singletons, builds the active ArasClient and the
+ * AgentService lazily, and rebuilds them when configuration changes.
  */
 export class AppServices {
   readonly settings: SettingsService
+  readonly threadStore: SqliteThreadStore
+  readonly runStore: SqliteRunStore
+  readonly eventLog: AgentEventLog
+  private readonly checkpointer: BaseCheckpointSaver
   private activeClient: { id: string; client: ArasClient } | undefined
   private agent: AgentService | undefined
 
-  constructor() {
-    this.settings = new SettingsService(
-      new ElectronConfigStore(),
-      new SafeStorageSecretStore()
-    )
+  constructor(deps: AppServicesDeps) {
+    this.settings = deps.settings
+    this.checkpointer = deps.checkpointer
+    this.threadStore = deps.threadStore
+    this.runStore = deps.runStore
+    this.eventLog = deps.eventLog
   }
 
   /** Drop cached client/agent when connections or active connection change. */
@@ -68,14 +87,24 @@ export class AppServices {
     // `getSignal` always reads the live instance even though tools are built first.
     let agentRef: AgentService | undefined
     const tools = new ToolRegistry()
-      .register(createArasTools({
-        getClient: () => this.getActiveClient(),
-        getSignal: () => agentRef?.getCurrentSignal(),
-        toolTimeoutMs: agentSettings.toolTimeoutSec * 1000
-      }))
+      .register(
+        createArasTools({
+          getClient: () => this.getActiveClient(),
+          getSignal: () => agentRef?.getCurrentSignal(),
+          toolTimeoutMs: agentSettings.toolTimeoutSec * 1000,
+          ...(agentSettings.maxRetryAttempts !== undefined
+            ? { maxRetryAttempts: agentSettings.maxRetryAttempts }
+            : {})
+        })
+      )
       .list()
 
-    const agent = new AgentService(model, tools)
+    const threadId = this.settings.getOrCreateActiveThreadId()
+    // Ensure the threads-table row exists so future UI features can list it.
+    if (!this.threadStore.get(threadId)) {
+      this.threadStore.create({ id: threadId, name: 'Chat' })
+    }
+    const agent = new AgentService(model, tools, this.checkpointer, threadId)
     agentRef = agent
     this.agent = agent
     return this.agent

@@ -15,6 +15,7 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
   const [current, setCurrent] = useState<LlmSettings | null>(null)
   const [saved, setSaved] = useState(false)
   const [toolTimeoutSec, setToolTimeoutSec] = useState(30)
+  const [maxRetryAttempts, setMaxRetryAttempts] = useState<string>('')
   const [agentSaved, setAgentSaved] = useState(false)
 
   useEffect(() => {
@@ -27,6 +28,7 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
     })
     void window.api.settings.getAgent().then((s: AgentSettings) => {
       setToolTimeoutSec(s.toolTimeoutSec)
+      setMaxRetryAttempts(s.maxRetryAttempts !== undefined ? String(s.maxRetryAttempts) : '')
     })
   }, [])
 
@@ -45,7 +47,12 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
   }
 
   const saveAgent = async (): Promise<void> => {
-    await window.api.settings.saveAgent({ toolTimeoutSec })
+    const trimmed = maxRetryAttempts.trim()
+    const parsed = trimmed === '' ? undefined : Number(trimmed)
+    await window.api.settings.saveAgent({
+      toolTimeoutSec,
+      ...(parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? { maxRetryAttempts: parsed } : {})
+    })
     setAgentSaved(true)
     onChanged()
     setTimeout(() => setAgentSaved(false), 1500)
@@ -129,8 +136,23 @@ export function SettingsPanel({ onChanged }: { onChanged: () => void }): JSX.Ele
         />
         <p className="muted" style={{ marginTop: 4 }}>
           Max time per tool call before the agent reports a timeout error. Each read tool retries
-          with exponential backoff (2 s → 4 s → 8 s …) until it succeeds or you press Stop.
+          with exponential backoff (jittered, capped at 16 s) until it succeeds or you press Stop.
         </p>
+
+        <label style={{ marginTop: 12 }}>Max retry attempts</label>
+        <input
+          type="number"
+          min={1}
+          max={1000}
+          placeholder="(blank = infinite)"
+          value={maxRetryAttempts}
+          onChange={(e) => setMaxRetryAttempts(e.target.value)}
+        />
+        <p className="muted" style={{ marginTop: 4 }}>
+          Leave blank for infinite retries (default). Set a number to cap retries per tool call —
+          useful when the Aras instance is down and you'd rather fail fast.
+        </p>
+
         <div className="row" style={{ marginTop: 12 }}>
           <button onClick={() => void saveAgent()}>Save</button>
           {agentSaved && <span className="pill green">Saved</span>}

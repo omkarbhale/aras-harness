@@ -1,7 +1,8 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { StructuredToolInterface } from '@langchain/core/tools'
 import { HumanMessage, SystemMessage } from '@langchain/core/messages'
-import { Command, MemorySaver, interrupt as _interrupt } from '@langchain/langgraph'
+import { Command, interrupt as _interrupt } from '@langchain/langgraph'
+import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
 import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import type { AgentEvent } from '@shared/ipc'
 import type { ApprovalDecision, ApprovalRequest } from './tools'
@@ -30,17 +31,21 @@ type TurnEnd = { interruptedApprovalId: string } | null
  */
 export class AgentService {
   private readonly agent: ReturnType<typeof createReactAgent>
-  private readonly checkpointer = new MemorySaver()
-  private readonly threadId = `thread-${globalThis.crypto.randomUUID()}`
+  private readonly threadId: string
   private readonly pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
-  private started = false
   private currentAC: AbortController | undefined
 
-  constructor(model: BaseChatModel, tools: StructuredToolInterface[]) {
+  constructor(
+    model: BaseChatModel,
+    tools: StructuredToolInterface[],
+    checkpointer: BaseCheckpointSaver,
+    threadId: string
+  ) {
+    this.threadId = threadId
     this.agent = createReactAgent({
       llm: model,
       tools,
-      checkpointSaver: this.checkpointer
+      checkpointSaver: checkpointer
     })
   }
 
@@ -62,10 +67,13 @@ export class AgentService {
     emit({ type: 'run_start', runId })
     const config = { configurable: { thread_id: this.threadId } }
 
-    const firstInput = this.started
+    // System prompt goes in only when this thread has no prior messages — survives restart.
+    const state = await this.agent.getState(config)
+    const existing = (state?.values as { messages?: unknown[] } | undefined)?.messages
+    const hasHistory = Array.isArray(existing) && existing.length > 0
+    const firstInput = hasHistory
       ? { messages: [new HumanMessage(message)] }
       : { messages: [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(message)] }
-    this.started = true
 
     try {
       let next: unknown = firstInput

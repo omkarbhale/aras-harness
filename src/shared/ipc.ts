@@ -46,10 +46,13 @@ export type LlmProviderId = 'anthropic' | 'openai' | 'ollama'
 /** Agent behaviour settings (non-secret, persisted in config store). */
 export interface AgentSettings {
   toolTimeoutSec: number
+  /** Cap on retry attempts for read tools. Undefined = infinite (default). */
+  maxRetryAttempts?: number
 }
 
 export interface AgentSettingsInput {
   toolTimeoutSec: number
+  maxRetryAttempts?: number
 }
 
 /** LLM settings as exposed to the UI — never contains the API key. */

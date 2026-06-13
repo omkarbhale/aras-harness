@@ -25,13 +25,17 @@ export const llmConfigSchema = z.object({
 export type LlmConfig = z.infer<typeof llmConfigSchema>
 
 export const agentConfigSchema = z.object({
-  toolTimeoutSec: z.number().int().min(5).max(300).default(30)
+  toolTimeoutSec: z.number().int().min(5).max(300).default(30),
+  /** Optional cap on read-tool retry attempts. Omitted = infinite (current default behaviour). */
+  maxRetryAttempts: z.number().int().min(1).max(1000).optional()
 })
 export type AgentConfig = z.infer<typeof agentConfigSchema>
 
 export const appConfigSchema = z.object({
   connections: z.array(connectionRecordSchema).default([]),
   activeConnectionId: z.string().nullable().default(null),
+  /** Stable LangGraph thread_id for the single chat conversation. Phase 2 will allow many. */
+  activeThreadId: z.string().nullable().default(null),
   llm: llmConfigSchema.nullable().default(null),
   agent: agentConfigSchema.default({ toolTimeoutSec: 30 })
 })
@@ -40,6 +44,7 @@ export type AppConfig = z.infer<typeof appConfigSchema>
 export const defaultAppConfig: AppConfig = {
   connections: [],
   activeConnectionId: null,
+  activeThreadId: null,
   llm: null,
   agent: { toolTimeoutSec: 30 }
 }
