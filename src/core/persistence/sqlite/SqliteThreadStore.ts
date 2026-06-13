@@ -8,6 +8,11 @@ export interface ThreadRecord {
   archivedAt: number | null
 }
 
+export interface ThreadSummaryRow extends ThreadRecord {
+  messageCount: number
+  preview: string | null
+}
+
 /**
  * CRUD over the `threads` table. The thread id doubles as the LangGraph `thread_id`
  * passed into the checkpointer, so a thread row anchors all of its agent state.
@@ -20,6 +25,35 @@ export class SqliteThreadStore {
     return this.db
       .prepare(`SELECT id, name, createdAt, updatedAt, archivedAt FROM threads ${where}ORDER BY updatedAt DESC`)
       .all() as ThreadRecord[]
+  }
+
+  /**
+   * Same as {@link list} but augmented with message count + first-user-message preview,
+   * computed in a single query. Used by the sidebar.
+   */
+  listSummaries(): ThreadSummaryRow[] {
+    return this.db
+      .prepare(
+        `SELECT t.id, t.name, t.createdAt, t.updatedAt, t.archivedAt,
+                COALESCE(c.messageCount, 0) AS messageCount,
+                p.preview AS preview
+         FROM threads t
+         LEFT JOIN (
+           SELECT threadId, COUNT(*) AS messageCount FROM agent_events
+           WHERE type = 'user_message'
+           GROUP BY threadId
+         ) c ON c.threadId = t.id
+         LEFT JOIN (
+           SELECT threadId, json_extract(payload, '$.content') AS preview FROM (
+             SELECT threadId, payload,
+                    ROW_NUMBER() OVER (PARTITION BY threadId ORDER BY seq) AS rn
+             FROM agent_events WHERE type = 'user_message'
+           ) WHERE rn = 1
+         ) p ON p.threadId = t.id
+         WHERE t.archivedAt IS NULL
+         ORDER BY t.updatedAt DESC`
+      )
+      .all() as ThreadSummaryRow[]
   }
 
   get(id: string): ThreadRecord | undefined {

@@ -20,6 +20,25 @@ describe('SqliteThreadStore', () => {
     store.delete('t1')
     expect(store.list()).toHaveLength(0)
   })
+
+  it('listSummaries joins messageCount + first-user-message preview', () => {
+    const db = freshDb()
+    const threads = new SqliteThreadStore(db)
+    const events = new SqliteEventLog(db)
+    threads.create({ id: 't1', name: 'one' })
+    events.append('t1', 'r1', { type: 'user_message', runId: 'r1', content: 'first question' })
+    events.append('t1', 'r1', { type: 'assistant_message', runId: 'r1', content: 'reply' })
+    events.append('t1', 'r2', { type: 'user_message', runId: 'r2', content: 'follow-up' })
+
+    threads.create({ id: 't2', name: 'empty' })
+
+    const summaries = threads.listSummaries()
+    const byId = new Map(summaries.map((s) => [s.id, s]))
+    expect(byId.get('t1')?.messageCount).toBe(2)
+    expect(byId.get('t1')?.preview).toBe('first question')
+    expect(byId.get('t2')?.messageCount).toBe(0)
+    expect(byId.get('t2')?.preview).toBeNull()
+  })
 })
 
 describe('SqliteRunStore', () => {

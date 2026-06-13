@@ -106,16 +106,14 @@ export class AppServices {
   }
 
   /**
-   * Returns the active threadId, ensuring a corresponding row exists in the threads
-   * table. Phase 1 uses a single stable thread per install; phase 3 will accept a
-   * threadId from the renderer / CLI instead.
+   * Delete a thread and all of its persisted state (event log + runs + thread row).
+   * Checkpointer rows are left in place — they're keyed by threadId, so a new thread
+   * will not collide with them; a periodic sweep can reap orphans later.
    */
-  resolveActiveThreadId(): string {
-    const id = this.settings.getOrCreateActiveThreadId()
-    if (!this.threadStore.get(id)) {
-      this.threadStore.create({ id, name: 'Chat' })
-    }
-    return id
+  deleteThread(id: string): void {
+    this.eventLog.deleteByThread(id)
+    this.runStore.deleteByThread(id)
+    this.threadStore.delete(id)
   }
 
   /** Cancel the currently running agent turn. */

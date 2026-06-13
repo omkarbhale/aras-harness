@@ -198,10 +198,132 @@ button:disabled {
 }
 
 /* Chat */
+.chat-with-sidebar {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.chat-sidebar {
+  background: var(--bg-alt);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-sidebar-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.chat-sidebar-new {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.chat-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.chat-sidebar-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.chat-thread {
+  display: flex;
+  align-items: stretch;
+  padding: 0 6px;
+  border-left: 3px solid transparent;
+}
+
+.chat-thread.active {
+  background: var(--panel);
+  border-left-color: var(--accent);
+}
+
+.chat-thread:hover .chat-thread-actions {
+  opacity: 1;
+}
+
+.chat-thread-button {
+  flex: 1;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.chat-thread-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-thread-preview {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+.chat-thread input {
+  flex: 1;
+  margin: 6px 8px;
+  font-size: 13px;
+}
+
+.chat-thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 4px 6px;
+}
+
+button.ghost:hover {
+  color: var(--text);
+}
+
+button.ghost.danger:hover {
+  color: var(--red);
+}
+
 .chat {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden;
 }
 
 .chat-log {

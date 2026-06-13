@@ -11,10 +11,13 @@ import {
   type ConnectionInput,
   type LlmSettings,
   type LlmSettingsInput,
-  type TestResult
+  type TestResult,
+  type ThreadSummary
 } from '@shared/ipc'
 import type { AppServices } from '../services/AppServices'
 import { InProcessApprovalBus } from './InProcessApprovalBus'
+
+const DEFAULT_THREAD_NAME = 'New chat'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -89,20 +92,73 @@ export function registerIpc(services: AppServices, sendEvent: (event: AgentEvent
     services.getActiveClient().runAml(body)
   )
 
-  // -- Agent --------------------------------------------------------------
-  ipcMain.handle(IpcChannels.agentSend, (_e, message: string): { runId: string } => {
-    const runId = randomUUID()
-    const threadId = services.resolveActiveThreadId()
-    const ac = new AbortController()
-    activeRuns.set(runId, ac)
+  // -- Threads ------------------------------------------------------------
+  ipcMain.handle(IpcChannels.threadsList, (): ThreadSummary[] =>
+    services.threadStore.listSummaries().map((row) => ({
+      id: row.id,
+      name: row.name,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      messageCount: row.messageCount,
+      preview: row.preview
+    }))
+  )
 
-    void driveAgentRun({ runId, threadId, message, services, sendEvent, approvals, ac })
-      .finally(() => {
-        if (activeRuns.get(runId) === ac) activeRuns.delete(runId)
-      })
+  ipcMain.handle(
+    IpcChannels.threadsCreate,
+    (_e, input: { name?: string } = {}): ThreadSummary => {
+      const id = randomUUID()
+      const record = services.threadStore.create({ id, name: input.name?.trim() || DEFAULT_THREAD_NAME })
+      return {
+        id: record.id,
+        name: record.name,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        messageCount: 0,
+        preview: null
+      }
+    }
+  )
 
-    return { runId }
+  ipcMain.handle(
+    IpcChannels.threadsRename,
+    (_e, input: { id: string; name: string }): void => {
+      const next = input.name.trim()
+      if (!next) return
+      services.threadStore.rename(input.id, next)
+    }
+  )
+
+  ipcMain.handle(IpcChannels.threadsDelete, (_e, id: string): void => {
+    services.deleteThread(id)
   })
+
+  ipcMain.handle(IpcChannels.threadsLoadEvents, (_e, id: string): AgentEvent[] =>
+    services.eventLog.listByThread(id)
+  )
+
+  // -- Agent --------------------------------------------------------------
+  ipcMain.handle(
+    IpcChannels.agentSend,
+    (_e, input: { threadId: string; message: string }): { runId: string } => {
+      const runId = randomUUID()
+      const { threadId, message } = input
+      // Ensure the thread row exists (caller may have created it via threadsCreate, but
+      // legacy paths or a deleted-then-re-sent thread should self-heal).
+      if (!services.threadStore.get(threadId)) {
+        services.threadStore.create({ id: threadId, name: DEFAULT_THREAD_NAME })
+      }
+      const ac = new AbortController()
+      activeRuns.set(runId, ac)
+
+      void driveAgentRun({ runId, threadId, message, services, sendEvent, approvals, ac })
+        .finally(() => {
+          if (activeRuns.get(runId) === ac) activeRuns.delete(runId)
+        })
+
+      return { runId }
+    }
+  )
 
   ipcMain.handle(
     IpcChannels.agentApprove,
@@ -145,10 +201,18 @@ async function driveAgentRun(input: DriveRunInput): Promise<void> {
     sendEvent(event)
   }
 
+  // Auto-name a freshly created thread from its first user message before any events fire,
+  // so the UI's sidebar shows a meaningful title instead of "New chat" the moment it lands.
+  const thread = services.threadStore.get(threadId)
+  if (thread && thread.name === DEFAULT_THREAD_NAME) {
+    const title = message.trim().split(/\s+/).join(' ').slice(0, 60)
+    if (title) services.threadStore.rename(threadId, title)
+  }
+
   emit({ type: 'run_start', runId })
+  emit({ type: 'user_message', runId, content: message })
   try {
     const agent = services.getOrCreateAgent()
-    // Abort propagation: cancelling the run also wakes any pending approval await.
     let next: HumanMessage | Command = new HumanMessage(message)
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -157,8 +221,10 @@ async function driveAgentRun(input: DriveRunInput): Promise<void> {
       const decision = await approvals.awaitDecision(result.approvalId, ac.signal)
       next = new Command({ resume: decision })
     }
+    services.threadStore.touch(threadId)
     emit({ type: 'done', runId })
   } catch (error) {
+    services.threadStore.touch(threadId)
     if (ac.signal.aborted) {
       emit({ type: 'done', runId })
     } else {

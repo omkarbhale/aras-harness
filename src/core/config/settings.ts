@@ -34,8 +34,6 @@ export type AgentConfig = z.infer<typeof agentConfigSchema>
 export const appConfigSchema = z.object({
   connections: z.array(connectionRecordSchema).default([]),
   activeConnectionId: z.string().nullable().default(null),
-  /** Stable LangGraph thread_id for the single chat conversation. Phase 2 will allow many. */
-  activeThreadId: z.string().nullable().default(null),
   llm: llmConfigSchema.nullable().default(null),
   agent: agentConfigSchema.default({ toolTimeoutSec: 30 })
 })
@@ -44,7 +42,6 @@ export type AppConfig = z.infer<typeof appConfigSchema>
 export const defaultAppConfig: AppConfig = {
   connections: [],
   activeConnectionId: null,
-  activeThreadId: null,
   llm: null,
   agent: { toolTimeoutSec: 30 }
 }

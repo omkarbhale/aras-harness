@@ -152,17 +152,6 @@ export class SettingsService {
     return this.getAgentSettings()
   }
 
-  // -- Thread id (phase 1: a single default thread) -------------------------
-
-  /** Returns the persisted thread id, generating + saving one if absent. */
-  getOrCreateActiveThreadId(): string {
-    const cfg = this.config.load()
-    if (cfg.activeThreadId) return cfg.activeThreadId
-    const id = this.genId()
-    cfg.activeThreadId = id
-    this.config.save(cfg)
-    return id
-  }
 
   // -- helpers --------------------------------------------------------------
 

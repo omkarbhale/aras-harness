@@ -69,4 +69,8 @@ export class SqliteRunStore {
       .get(runId) as { cancelRequested: number } | undefined
     return row?.cancelRequested === 1
   }
+
+  deleteByThread(threadId: string): void {
+    this.db.prepare('DELETE FROM runs WHERE threadId = ?').run(threadId)
+  }
 }
