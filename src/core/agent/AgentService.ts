@@ -5,7 +5,7 @@ import { Command, interrupt as _interrupt } from '@langchain/langgraph'
 import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint'
 import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import type { AgentEvent } from '@shared/ipc'
-import type { ApprovalDecision, ApprovalRequest } from './tools'
+import type { ApprovalRequest } from './tools'
 
 // Keep a value reference so tree-shaking doesn't drop the re-export used by tools.ts.
 void _interrupt
@@ -20,28 +20,38 @@ Guidelines:
 - Mutating AML (add/update/delete/edit/create) requires user approval; the run_aml tool handles this — explain clearly what a write will do before issuing it.
 - After acting, summarize what you found or changed in plain language.`
 
-/** What a single streamed turn ended with. */
-type TurnEnd = { interruptedApprovalId: string } | null
+export interface RunUntilPauseArgs {
+  runId: string
+  threadId: string
+  /** A user message starts a turn; a Command({resume}) resumes a previously paused one. */
+  input: HumanMessage | Command
+  emit: (event: AgentEvent) => void
+}
+
+export type RunUntilPauseResult =
+  | { status: 'done' }
+  | { status: 'paused'; approvalId: string; request: ApprovalRequest }
+
+type ApprovalSignal = { paused: { approvalId: string; request: ApprovalRequest } } | null
 
 /**
  * Wraps a LangGraph ReAct agent (model + tools + checkpointer) and adapts its stream
- * into the flat {@link AgentEvent} sequence the UI consumes. Mutating tools pause via
- * `interrupt()`; this service surfaces the approval request and resumes on the user's
- * decision.
+ * into the flat {@link AgentEvent} sequence the UI / CLI consumes. Mutating tools
+ * pause via `interrupt()`; one call to {@link runUntilPause} streams a single segment
+ * (initial turn OR a resume) and returns when either the graph finishes or the next
+ * approval is required. Callers loop on the return value, supplying decisions via
+ * `Command({resume})`. This contract is checkpointer-agnostic — same loop works for
+ * an in-process UI wrapper and for a fresh CLI process resuming a paused thread.
  */
 export class AgentService {
   private readonly agent: ReturnType<typeof createReactAgent>
-  private readonly threadId: string
-  private readonly pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
   private currentAC: AbortController | undefined
 
   constructor(
     model: BaseChatModel,
     tools: StructuredToolInterface[],
-    checkpointer: BaseCheckpointSaver,
-    threadId: string
+    checkpointer: BaseCheckpointSaver
   ) {
-    this.threadId = threadId
     this.agent = createReactAgent({
       llm: model,
       tools,
@@ -49,96 +59,74 @@ export class AgentService {
     })
   }
 
-  /** AbortSignal for the currently running turn (tools use this for retry / fetch abort). */
+  /** AbortSignal for the currently running segment (tools use this for retry / fetch abort). */
   getCurrentSignal(): AbortSignal | undefined {
     return this.currentAC?.signal
   }
 
-  /** Abort the current run. Safe to call when idle. */
+  /** Abort the currently streaming segment. Safe to call when idle. */
   cancel(): void {
     this.currentAC?.abort()
   }
 
-  /** Run one user message to completion (handling any approval pauses), emitting events. */
-  async run(runId: string, message: string, emit: (event: AgentEvent) => void): Promise<void> {
+  /**
+   * Stream one segment of the agent's execution. Returns `paused` if an approval
+   * `interrupt()` fires, otherwise `done`. Throws on abort or unhandled error.
+   */
+  async runUntilPause(args: RunUntilPauseArgs): Promise<RunUntilPauseResult> {
+    const { runId, threadId, input, emit } = args
     const ac = new AbortController()
     this.currentAC = ac
-
-    emit({ type: 'run_start', runId })
-    const config = { configurable: { thread_id: this.threadId } }
-
-    // System prompt goes in only when this thread has no prior messages — survives restart.
-    const state = await this.agent.getState(config)
-    const existing = (state?.values as { messages?: unknown[] } | undefined)?.messages
-    const hasHistory = Array.isArray(existing) && existing.length > 0
-    const firstInput = hasHistory
-      ? { messages: [new HumanMessage(message)] }
-      : { messages: [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(message)] }
+    const config = { configurable: { thread_id: threadId } }
 
     try {
-      let next: unknown = firstInput
-      // Stream; each time the graph interrupts for approval, wait then resume.
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const end = await this.streamTurn(runId, next, config, ac.signal, emit)
-        if (!end) break
-        const decision = await this.awaitApproval(end.interruptedApprovalId, ac.signal)
-        next = new Command({ resume: decision })
-      }
-      emit({ type: 'done', runId })
-    } catch (error) {
-      if (ac.signal.aborted) {
-        emit({ type: 'done', runId })
+      // Initial turn: the system prompt only goes in if this thread has no prior history.
+      // Resume turns (input is a Command) skip this — LangGraph picks up from the checkpoint.
+      let streamInput: unknown
+      if (input instanceof Command) {
+        streamInput = input
       } else {
-        emit({ type: 'error', runId, message: toMessage(error) })
+        const state = await this.agent.getState(config)
+        const existing = (state?.values as { messages?: unknown[] } | undefined)?.messages
+        const hasHistory = Array.isArray(existing) && existing.length > 0
+        streamInput = hasHistory
+          ? { messages: [input] }
+          : { messages: [new SystemMessage(SYSTEM_PROMPT), input] }
       }
+
+      const pause = await this.streamSegment(runId, streamInput, config, ac.signal, emit)
+      if (pause) {
+        return { status: 'paused', approvalId: pause.paused.approvalId, request: pause.paused.request }
+      }
+      return { status: 'done' }
     } finally {
       if (this.currentAC === ac) this.currentAC = undefined
     }
   }
 
-  /** Resolve a pending approval so the paused run can resume. */
-  provideApproval(approvalId: string, approved: boolean): void {
-    const resolve = this.pendingApprovals.get(approvalId)
-    if (resolve) {
-      this.pendingApprovals.delete(approvalId)
-      resolve({ approved })
-    }
-  }
-
-  private awaitApproval(approvalId: string, signal: AbortSignal): Promise<ApprovalDecision> {
-    return new Promise((resolve, reject) => {
-      this.pendingApprovals.set(approvalId, resolve)
-      signal.addEventListener('abort', () => {
-        this.pendingApprovals.delete(approvalId)
-        reject(new Error('Cancelled'))
-      }, { once: true })
-    })
-  }
-
-  private async streamTurn(
+  private async streamSegment(
     runId: string,
     input: unknown,
     config: { configurable: { thread_id: string } },
     signal: AbortSignal,
     emit: (event: AgentEvent) => void
-  ): Promise<TurnEnd> {
+  ): Promise<ApprovalSignal> {
     const stream = await this.agent.stream(
       input as Parameters<(typeof this.agent)['stream']>[0],
       { ...config, signal, streamMode: ['updates', 'messages'] }
     )
 
-    let end: TurnEnd = null
+    let paused: ApprovalSignal = null
     for await (const chunk of stream) {
       const [mode, payload] = chunk as [string, unknown]
       if (mode === 'messages') {
         this.emitTokens(runId, payload, emit)
       } else if (mode === 'updates') {
         const interrupted = this.handleUpdates(runId, payload, emit)
-        if (interrupted) end = interrupted
+        if (interrupted) paused = interrupted
       }
     }
-    return end
+    return paused
   }
 
   /** Extract streamed assistant text tokens from a `messages`-mode chunk. */
@@ -154,7 +142,7 @@ export class AgentService {
     runId: string,
     payload: unknown,
     emit: (event: AgentEvent) => void
-  ): TurnEnd {
+  ): ApprovalSignal {
     if (!payload || typeof payload !== 'object') return null
     const update = payload as Record<string, unknown>
 
@@ -171,7 +159,7 @@ export class AgentService {
           summary: value.summary,
           payload: value.payload
         })
-        return { interruptedApprovalId: value.approvalId }
+        return { paused: { approvalId: value.approvalId, request: value } }
       }
     }
 
@@ -248,9 +236,4 @@ function extractText(content: unknown): string {
       .join('')
   }
   return ''
-}
-
-function toMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
 }

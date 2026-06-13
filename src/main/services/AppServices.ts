@@ -99,15 +99,23 @@ export class AppServices {
       )
       .list()
 
-    const threadId = this.settings.getOrCreateActiveThreadId()
-    // Ensure the threads-table row exists so future UI features can list it.
-    if (!this.threadStore.get(threadId)) {
-      this.threadStore.create({ id: threadId, name: 'Chat' })
-    }
-    const agent = new AgentService(model, tools, this.checkpointer, threadId)
+    const agent = new AgentService(model, tools, this.checkpointer)
     agentRef = agent
     this.agent = agent
     return this.agent
+  }
+
+  /**
+   * Returns the active threadId, ensuring a corresponding row exists in the threads
+   * table. Phase 1 uses a single stable thread per install; phase 3 will accept a
+   * threadId from the renderer / CLI instead.
+   */
+  resolveActiveThreadId(): string {
+    const id = this.settings.getOrCreateActiveThreadId()
+    if (!this.threadStore.get(id)) {
+      this.threadStore.create({ id, name: 'Chat' })
+    }
+    return id
   }
 
   /** Cancel the currently running agent turn. */
