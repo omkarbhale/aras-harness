@@ -22,8 +22,11 @@ export function classifyError(error: unknown): { code: ExitCodeValue; message: s
     return { code: ExitCode.Connection, message: error.message }
   }
   const message = error instanceof Error ? error.message : String(error)
-  if (/api[_ -]?key|unauthorized|401|invalid api key/i.test(message)) {
+  if (/api[_ -]?key|unauthorized|401|invalid api key|llm provider|model/i.test(message)) {
     return { code: ExitCode.Llm, message }
+  }
+  if (/active aras connection|stored password/i.test(message)) {
+    return { code: ExitCode.Connection, message }
   }
   return { code: ExitCode.Unexpected, message }
 }

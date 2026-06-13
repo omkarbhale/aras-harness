@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
 import { buildCliServices } from './buildCliServices'
+import { agentCommand } from './commands/agent'
 import { connectionCommand } from './commands/connection'
 import { settingsCommand } from './commands/settings'
 import { threadCommand } from './commands/thread'
@@ -16,6 +17,7 @@ async function main(): Promise<void> {
   program.addCommand(connectionCommand(services))
   program.addCommand(settingsCommand(services))
   program.addCommand(threadCommand(services))
+  program.addCommand(agentCommand(services))
 
   await program.parseAsync(process.argv)
 }
