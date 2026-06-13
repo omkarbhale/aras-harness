@@ -21,7 +21,8 @@
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      "@cli/*": ["src/cli/*"]
     }
   },
   "include": [
@@ -29,6 +30,7 @@
     "src/preload/**/*",
     "src/core/**/*",
     "src/shared/**/*",
+    "src/cli/**/*",
     "electron.vite.config.ts",
     "vitest.config.ts"
   ]

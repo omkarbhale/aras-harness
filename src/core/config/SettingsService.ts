@@ -21,6 +21,10 @@ import {
  * Orchestrates non-secret config (via {@link ConfigStore}) and secrets (via
  * {@link SecretStore}) to provide connection + LLM management. Returns only
  * secret-free DTOs to the rest of the app; raw secrets stay inside this service.
+ *
+ * Methods that touch secrets are async because the CLI's keychain adapter is
+ * async (keytar); the Electron adapter is sync underneath but adapts to the
+ * same shape so SettingsService is portable.
  */
 export class SettingsService {
   constructor(
@@ -31,11 +35,12 @@ export class SettingsService {
 
   // -- Connections ----------------------------------------------------------
 
-  listConnections(): Connection[] {
-    return this.config.load().connections.map((record) => this.toConnectionDto(record))
+  async listConnections(): Promise<Connection[]> {
+    const records = this.config.load().connections
+    return Promise.all(records.map((record) => this.toConnectionDto(record)))
   }
 
-  saveConnection(input: ConnectionInput): Connection {
+  async saveConnection(input: ConnectionInput): Promise<Connection> {
     const cfg = this.config.load()
     const id = input.id ?? this.genId()
     const record: ConnectionRecord = connectionRecordSchema.parse({
@@ -58,19 +63,19 @@ export class SettingsService {
     this.config.save(cfg)
 
     if (input.password !== undefined && input.password !== '') {
-      this.secrets.set(secretKeys.connectionPassword(id), input.password)
+      await this.secrets.set(secretKeys.connectionPassword(id), input.password)
     }
     return this.toConnectionDto(record)
   }
 
-  deleteConnection(id: string): void {
+  async deleteConnection(id: string): Promise<void> {
     const cfg = this.config.load()
     cfg.connections = cfg.connections.filter((c) => c.id !== id)
     if (cfg.activeConnectionId === id) {
       cfg.activeConnectionId = cfg.connections[0]?.id ?? null
     }
     this.config.save(cfg)
-    this.secrets.delete(secretKeys.connectionPassword(id))
+    await this.secrets.delete(secretKeys.connectionPassword(id))
   }
 
   setActiveConnection(id: string): void {
@@ -87,10 +92,10 @@ export class SettingsService {
   }
 
   /** Full credentials (incl. password) for a connection, or null if missing. */
-  getConnectionCredentials(id: string): ArasCredentials | null {
+  async getConnectionCredentials(id: string): Promise<ArasCredentials | null> {
     const record = this.config.load().connections.find((c) => c.id === id)
     if (!record) return null
-    const password = this.secrets.get(secretKeys.connectionPassword(id))
+    const password = await this.secrets.get(secretKeys.connectionPassword(id))
     if (password === null) return null
     return {
       instanceUrl: record.instanceUrl,
@@ -102,18 +107,18 @@ export class SettingsService {
 
   // -- LLM settings ---------------------------------------------------------
 
-  getLlmSettings(): LlmSettings | null {
+  async getLlmSettings(): Promise<LlmSettings | null> {
     const llm = this.config.load().llm
     if (!llm) return null
     return {
       provider: llm.provider,
       model: llm.model,
       ...(llm.baseUrl !== undefined ? { baseUrl: llm.baseUrl } : {}),
-      hasApiKey: this.secrets.has(secretKeys.llmApiKey(llm.provider))
+      hasApiKey: await this.secrets.has(secretKeys.llmApiKey(llm.provider))
     }
   }
 
-  saveLlmSettings(input: LlmSettingsInput): LlmSettings {
+  async saveLlmSettings(input: LlmSettingsInput): Promise<LlmSettings> {
     const cfg = this.config.load()
     cfg.llm = llmConfigSchema.parse({
       provider: input.provider,
@@ -123,38 +128,45 @@ export class SettingsService {
     this.config.save(cfg)
 
     if (input.apiKey !== undefined && input.apiKey !== '') {
-      this.secrets.set(secretKeys.llmApiKey(input.provider), input.apiKey)
+      await this.secrets.set(secretKeys.llmApiKey(input.provider), input.apiKey)
     }
-    return this.getLlmSettings()!
+    return (await this.getLlmSettings())!
   }
 
-  getLlmApiKey(provider: string): string | null {
+  async getLlmApiKey(provider: string): Promise<string | null> {
     return this.secrets.get(secretKeys.llmApiKey(provider))
   }
 
   // -- Agent settings -------------------------------------------------------
 
   getAgentSettings(): AgentSettings {
-    return { toolTimeoutSec: this.config.load().agent.toolTimeoutSec }
+    const a = this.config.load().agent
+    return {
+      toolTimeoutSec: a.toolTimeoutSec,
+      ...(a.maxRetryAttempts !== undefined ? { maxRetryAttempts: a.maxRetryAttempts } : {})
+    }
   }
 
   saveAgentSettings(input: AgentSettingsInput): AgentSettings {
     const cfg = this.config.load()
-    cfg.agent = agentConfigSchema.parse({ toolTimeoutSec: input.toolTimeoutSec })
+    cfg.agent = agentConfigSchema.parse({
+      toolTimeoutSec: input.toolTimeoutSec,
+      ...(input.maxRetryAttempts !== undefined ? { maxRetryAttempts: input.maxRetryAttempts } : {})
+    })
     this.config.save(cfg)
-    return { toolTimeoutSec: cfg.agent.toolTimeoutSec }
+    return this.getAgentSettings()
   }
 
   // -- helpers --------------------------------------------------------------
 
-  private toConnectionDto(record: ConnectionRecord): Connection {
+  private async toConnectionDto(record: ConnectionRecord): Promise<Connection> {
     return {
       id: record.id,
       name: record.name,
       instanceUrl: record.instanceUrl,
       database: record.database,
       username: record.username,
-      hasPassword: this.secrets.has(secretKeys.connectionPassword(record.id))
+      hasPassword: await this.secrets.has(secretKeys.connectionPassword(record.id))
     }
   }
 }

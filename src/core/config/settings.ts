@@ -25,7 +25,9 @@ export const llmConfigSchema = z.object({
 export type LlmConfig = z.infer<typeof llmConfigSchema>
 
 export const agentConfigSchema = z.object({
-  toolTimeoutSec: z.number().int().min(5).max(300).default(30)
+  toolTimeoutSec: z.number().int().min(5).max(300).default(30),
+  /** Optional cap on read-tool retry attempts. Omitted = infinite (current default behaviour). */
+  maxRetryAttempts: z.number().int().min(1).max(1000).optional()
 })
 export type AgentConfig = z.infer<typeof agentConfigSchema>
 
@@ -61,10 +63,10 @@ export interface ConfigStore {
 }
 
 export interface SecretStore {
-  get(key: string): string | null
-  set(key: string, value: string): void
-  delete(key: string): void
-  has(key: string): boolean
+  get(key: string): Promise<string | null>
+  set(key: string, value: string): Promise<void>
+  delete(key: string): Promise<void>
+  has(key: string): Promise<boolean>
 }
 
 /** Stable secret-key conventions so all callers agree on where secrets live. */

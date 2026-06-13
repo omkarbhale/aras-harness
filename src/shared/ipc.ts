@@ -46,10 +46,13 @@ export type LlmProviderId = 'anthropic' | 'openai' | 'ollama'
 /** Agent behaviour settings (non-secret, persisted in config store). */
 export interface AgentSettings {
   toolTimeoutSec: number
+  /** Cap on retry attempts for read tools. Undefined = infinite (default). */
+  maxRetryAttempts?: number
 }
 
 export interface AgentSettingsInput {
   toolTimeoutSec: number
+  maxRetryAttempts?: number
 }
 
 /** LLM settings as exposed to the UI — never contains the API key. */
@@ -87,11 +90,27 @@ export interface AmlResult {
 }
 
 // ----------------------------------------------------------------------------
+// Threads
+// ----------------------------------------------------------------------------
+
+export interface ThreadSummary {
+  id: string
+  name: string
+  createdAt: number
+  updatedAt: number
+  /** Count of user messages in the thread (drives the sidebar's last-message hint). */
+  messageCount: number
+  /** First user message in the thread, truncated — used as a fallback subtitle. */
+  preview: string | null
+}
+
+// ----------------------------------------------------------------------------
 // Agent streaming events (main -> renderer, push channel)
 // ----------------------------------------------------------------------------
 
 export type AgentEvent =
   | { type: 'run_start'; runId: string }
+  | { type: 'user_message'; runId: string; content: string }
   | { type: 'token'; runId: string; delta: string }
   | { type: 'tool_start'; runId: string; toolCallId: string; name: string; args: unknown }
   | { type: 'tool_end'; runId: string; toolCallId: string; result: string; isError: boolean }
@@ -123,6 +142,11 @@ export const IpcChannels = {
   settingsGetAgent: 'settings:getAgent',
   settingsSaveAgent: 'settings:saveAgent',
   queryRunAml: 'query:runAml',
+  threadsList: 'threads:list',
+  threadsCreate: 'threads:create',
+  threadsRename: 'threads:rename',
+  threadsDelete: 'threads:delete',
+  threadsLoadEvents: 'threads:loadEvents',
   agentSend: 'agent:send',
   agentApprove: 'agent:approve',
   agentCancel: 'agent:cancel',
@@ -152,9 +176,16 @@ export interface HarnessApi {
   query: {
     runAml(body: string): Promise<AmlResult>
   }
+  threads: {
+    list(): Promise<ThreadSummary[]>
+    create(input?: { name?: string }): Promise<ThreadSummary>
+    rename(input: { id: string; name: string }): Promise<void>
+    remove(id: string): Promise<void>
+    loadEvents(id: string): Promise<AgentEvent[]>
+  }
   agent: {
-    /** Starts a new agent run for the message; events arrive on `onEvent`. */
-    send(message: string): Promise<{ runId: string }>
+    /** Starts a new agent run for the message on the given thread; events arrive on `onEvent`. */
+    send(input: { threadId: string; message: string }): Promise<{ runId: string }>
     /** Answer a pending approval_request. */
     approve(approvalId: string, approved: boolean): Promise<void>
     /** Cancel the running agent run. */

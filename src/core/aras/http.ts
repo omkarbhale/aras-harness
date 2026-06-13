@@ -39,20 +39,40 @@ export class FetchHttpClient implements HttpClient {
   }
 }
 
+export interface RetryOptions {
+  /** Cap on attempts. Omitted/0 = infinite retries (default; matches original behaviour). */
+  maxAttempts?: number
+  /** First backoff before retry. Defaults to 2 s. */
+  baseDelayMs?: number
+  /** Maximum backoff per attempt. Defaults to 16 s. */
+  maxDelayMs?: number
+}
+
 /**
- * Retry `fn` indefinitely with exponential backoff (2 s, 4 s, 8 s, …) on any thrown
- * error. Pass `signal` to abort mid-sleep so the caller's cancellation propagates.
+ * Retry `fn` with exponential backoff + jitter on any thrown error.
+ * Default behaviour is infinite retries cancellable via `signal` — pass
+ * `{ maxAttempts: N }` to cap the number of attempts.
  */
-export async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  let delayMs = 2000
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  signal?: AbortSignal,
+  options: RetryOptions = {}
+): Promise<T> {
+  const max = options.maxAttempts && options.maxAttempts > 0 ? options.maxAttempts : Infinity
+  const base = options.baseDelayMs ?? 2000
+  const cap = options.maxDelayMs ?? 16000
+  let attempt = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
       return await fn()
     } catch (err) {
+      attempt++
       if (signal?.aborted) throw err
-      await sleep(delayMs, signal)
-      delayMs *= 2
+      if (attempt >= max) throw err
+      const exp = Math.min(cap, base * Math.pow(2, attempt - 1))
+      const jitter = exp * (0.5 + Math.random() * 0.5) // 50%–100% of exp
+      await sleep(jitter, signal)
     }
   }
 }
