@@ -7,7 +7,13 @@ const WRITE_ACTIONS = new Set([
   'delete',
   'copy',
   'purge',
-  'merge'
+  'merge',
+  // State / lock mutations: these change server-side data too, so they must be gated
+  // (and must NOT go down the read-retry path, which would re-fire the mutation).
+  'lock',
+  'unlock',
+  'promote',
+  'recover'
 ])
 
 /**

@@ -151,23 +151,44 @@ export function createArasTools(deps: AgentToolDeps) {
 
   const introspectItemType = tool(
     async ({ name }: { name: string }) => {
-      const aml =
+      const propsAml =
         `<AML><Item type="ItemType" action="get" select="name,label">` +
         `<name>${name}</name>` +
         `<Relationships><Item type="Property" action="get" select="name,label,data_type,data_source" /></Relationships>` +
         `</Item></AML>`
-      const result = await withTimeout(
-        retry(async () => (await client()).runAml(aml, sig())),
+      const props = await withTimeout(
+        retry(async () => (await client()).runAml(propsAml, sig())),
         timeoutMs,
         'introspect_itemtype'
       )
-      return summarizeResult(result.items)
+
+      // RelationshipTypes whose source is this ItemType — i.e. the relationships available on it.
+      // Best-effort enrichment: a single attempt so a transient blip or unexpected schema can't
+      // stall (or fail) the core property introspection above.
+      const relsAml =
+        `<AML><Item type="RelationshipType" action="get" select="name,related_id">` +
+        `<source_id><Item type="ItemType" action="get" select="id"><name>${name}</name></Item></source_id>` +
+        `</Item></AML>`
+      let rels: typeof props.items = []
+      try {
+        const relResult = await withTimeout(
+          withRetry(async () => (await client()).runAml(relsAml, sig()), sig(), { maxAttempts: 1 }),
+          timeoutMs,
+          'introspect_itemtype'
+        )
+        rels = relResult.items
+      } catch {
+        rels = []
+      }
+
+      return summarizeResult([...props.items, ...rels])
     },
     {
       name: 'introspect_itemtype',
       description:
-        'Get an ItemType and its Property definitions (name, label, data_type). Use this to ' +
-        'discover the schema before writing AML against an unfamiliar ItemType.',
+        'Get an ItemType with its Property definitions (name, label, data_type) AND the ' +
+        'RelationshipTypes whose source is this ItemType (relationship name + related ItemType). ' +
+        'Use this to discover both the schema and the available relationships before writing AML.',
       schema: z.object({ name: z.string().describe('Exact ItemType name, e.g. "Part".') })
     }
   )
