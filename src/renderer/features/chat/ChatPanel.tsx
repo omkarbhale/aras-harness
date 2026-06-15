@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChatSidebar } from './ChatSidebar'
+import { formatAml } from './formatAml'
 import { useAgent, type ChatItem } from './useAgent'
 import { useThreads } from './useThreads'
 
@@ -89,7 +90,8 @@ export function ChatPanel(): JSX.Element {
           ))}
           {busy && (
             <div className="working-row">
-              <span className="muted">● working…</span>
+              <span className="spinner" />
+              <span className="muted">Working…</span>
               <button className="stop-btn" onClick={cancel}>■ Stop</button>
             </div>
           )}
@@ -125,54 +127,153 @@ function ChatEntry({
 }): JSX.Element | null {
   switch (item.kind) {
     case 'user':
-      return <div className="bubble user">{item.text}</div>
+      return (
+        <div className="msg msg-user">
+          <div className="msg-role">You</div>
+          <div className="bubble user">{item.text}</div>
+        </div>
+      )
     case 'assistant':
-      return <div className="bubble assistant">{item.text || '…'}</div>
+      return (
+        <div className="msg msg-assistant">
+          <div className="msg-role">Agent</div>
+          <div className="bubble assistant">
+            {item.text || (item.live ? '' : '…')}
+            {item.live && <span className="caret" />}
+          </div>
+        </div>
+      )
     case 'tool':
-      return (
-        <div className="tool">
-          <div>
-            🔧 <code>{item.name}</code>
-            {item.isError && <span className="pill red" style={{ marginLeft: 6 }}>error</span>}
-          </div>
-          <pre>{JSON.stringify(item.args, null, 2)}</pre>
-          {item.result !== undefined && <pre>{truncate(item.result, 1200)}</pre>}
-        </div>
-      )
+      return <ToolCall item={item} />
     case 'approval':
-      return (
-        <div className="approval">
-          <div>
-            ⚠️ The agent wants to run a <strong>write</strong> via <code>{item.tool}</code>:{' '}
-            {item.summary}
-          </div>
-          <pre style={{ maxHeight: 160, overflow: 'auto' }}>{describePayload(item.payload)}</pre>
-          {item.status === 'pending' ? (
-            <div className="row">
-              <button onClick={() => onRespond(item.approvalId, true)}>Approve</button>
-              <button className="danger" onClick={() => onRespond(item.approvalId, false)}>
-                Deny
-              </button>
-            </div>
-          ) : (
-            <span className={`pill ${item.status === 'approved' ? 'green' : 'red'}`}>
-              {item.status}
-            </span>
-          )}
-        </div>
-      )
+      return <ApprovalCard item={item} onRespond={onRespond} />
     default:
       return null
   }
 }
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text
+const TOOL_LABELS: Record<string, string> = {
+  run_aml: 'Run AML',
+  run_odata_query: 'OData Query',
+  list_itemtypes: 'List ItemTypes',
+  introspect_itemtype: 'Introspect ItemType',
+  get_method_source: 'Get Method Source'
 }
 
-function describePayload(payload: unknown): string {
+function humanizeTool(name: string): string {
+  if (!name) return 'Tool'
+  return TOOL_LABELS[name] ?? name.replace(/_/g, ' ')
+}
+
+function ToolCall({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }): JSX.Element {
+  const running = item.result === undefined
+  const input = describeToolInput(item.args)
+  return (
+    <div className={`tool-call${item.isError ? ' error' : ''}`}>
+      <div className="tool-call-header">
+        <span className="tool-call-icon">⚙</span>
+        <span className="tool-call-kind">Tool</span>
+        <span className="tool-call-name">{humanizeTool(item.name)}</span>
+        {running ? (
+          <span className="spinner" title="running…" />
+        ) : (
+          <span className={`pill ${item.isError ? 'red' : 'green'}`}>
+            {item.isError ? 'error' : 'done'}
+          </span>
+        )}
+      </div>
+      {input && (
+        <div className="tool-section">
+          <div className="tool-section-label">{input.label}</div>
+          <pre className="code">{input.code}</pre>
+        </div>
+      )}
+      {item.result !== undefined && (
+        <details className="tool-section" open>
+          <summary className="tool-section-label">Result</summary>
+          <pre className="code">{formatResult(item.result)}</pre>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function ApprovalCard({
+  item,
+  onRespond
+}: {
+  item: Extract<ChatItem, { kind: 'approval' }>
+  onRespond: (approvalId: string, approved: boolean) => void
+}): JSX.Element {
+  return (
+    <div className={`approval${item.status === 'pending' ? '' : ' resolved'}`}>
+      <div className="approval-header">
+        <span className="approval-icon">⚠</span>
+        <span className="approval-title">
+          Approve write via <code>{item.tool}</code>
+        </span>
+        {item.status !== 'pending' && (
+          <span className={`pill ${item.status === 'approved' ? 'green' : 'red'}`}>
+            {item.status}
+          </span>
+        )}
+      </div>
+      <div className="approval-summary">{item.summary}</div>
+      <pre className="code">{extractAml(item.payload)}</pre>
+      {item.status === 'pending' && (
+        <div className="approval-actions">
+          <button onClick={() => onRespond(item.approvalId, true)}>Approve &amp; Run</button>
+          <button className="danger" onClick={() => onRespond(item.approvalId, false)}>
+            Deny
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function safeFormatAml(aml: string): string {
+  try {
+    return formatAml(aml)
+  } catch {
+    return aml
+  }
+}
+
+/** Pick the most useful field out of a tool's args and render it as code, not raw JSON. */
+function describeToolInput(args: unknown): { label: string; code: string } | null {
+  if (args === undefined || args === null) return null
+  if (typeof args !== 'object') return { label: 'Input', code: String(args) }
+  const a = args as Record<string, unknown>
+  if (typeof a.aml === 'string') return { label: 'AML', code: safeFormatAml(a.aml) }
+  if (typeof a.query === 'string') return { label: 'OData', code: a.query }
+  const keys = Object.keys(a)
+  if (keys.length === 0) return null
+  if (keys.length === 1 && typeof a[keys[0]] === 'string') {
+    return { label: keys[0], code: String(a[keys[0]]) }
+  }
+  return { label: 'Input', code: JSON.stringify(a, null, 2) }
+}
+
+function extractAml(payload: unknown): string {
   if (payload && typeof payload === 'object' && 'aml' in payload) {
-    return String((payload as { aml: unknown }).aml)
+    return safeFormatAml(String((payload as { aml: unknown }).aml))
   }
   return JSON.stringify(payload, null, 2)
+}
+
+const MAX_RESULT_CHARS = 8000
+
+/** Pretty-print a JSON tool result; leave anything else as-is. Capped for the DOM. */
+function formatResult(result: string): string {
+  let out = result
+  const trimmed = result.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      out = JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      out = result
+    }
+  }
+  return out.length > MAX_RESULT_CHARS ? `${out.slice(0, MAX_RESULT_CHARS)}\n… (truncated)` : out
 }

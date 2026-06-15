@@ -188,11 +188,22 @@ export class AgentService {
     return paused
   }
 
-  /** Extract streamed assistant text tokens from a `messages`-mode chunk. */
+  /**
+   * Extract streamed assistant text tokens from a `messages`-mode chunk.
+   *
+   * The 'messages' stream carries EVERY message token — including the ToolMessages
+   * the tools node emits, which are the tool *results*. Those must NOT be rendered
+   * as assistant text: they already surface on the tool card via `tool_end`, and
+   * forwarding them here is what made tool output look like (duplicated) model
+   * output. Only genuine assistant/AI tokens from a non-tools node are emitted.
+   */
   private emitTokens(runId: string, payload: unknown, emit: (event: AgentEvent) => void): void {
-    const messageChunk = Array.isArray(payload) ? payload[0] : payload
-    const content = (messageChunk as { content?: unknown } | undefined)?.content
-    const text = extractText(content)
+    const [messageChunk, metadata] = (Array.isArray(payload) ? payload : [payload, undefined]) as [
+      MessageChunkLike | undefined,
+      StreamMetadata | undefined
+    ]
+    if (!isAssistantToken(messageChunk, metadata)) return
+    const text = extractText(messageChunk?.content)
     if (text) emit({ type: 'token', runId, delta: text })
   }
 
@@ -278,6 +289,34 @@ export class AgentService {
       if (text) emit({ type: 'assistant_message', runId, content: text })
     }
   }
+}
+
+export interface MessageChunkLike {
+  content?: unknown
+  /** LangChain message tag: 'ai' | 'tool' | 'human' | 'system' | ... */
+  _getType?: () => string
+}
+
+interface StreamMetadata {
+  /** The graph node that produced this chunk, e.g. 'agent' | 'tools'. */
+  langgraph_node?: string
+}
+
+/**
+ * True only when a `messages`-mode chunk is genuine assistant text — i.e. it comes
+ * from the model/agent node and is an AI message, not a tool result streamed from
+ * the tools node. Guards on both the stream metadata node and the message type so a
+ * miss on either signal still blocks tool output from leaking in as assistant text.
+ */
+export function isAssistantToken(
+  messageChunk: MessageChunkLike | undefined,
+  metadata: StreamMetadata | undefined
+): boolean {
+  if (!messageChunk) return false
+  if (metadata?.langgraph_node === 'tools') return false
+  const type = messageChunk._getType?.()
+  if (type && type !== 'ai') return false
+  return true
 }
 
 /** Flatten LangChain message content (string or content-block array) into plain text. */
