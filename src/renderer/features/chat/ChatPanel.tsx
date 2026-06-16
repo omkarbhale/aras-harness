@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChatSidebar } from './ChatSidebar'
+import { Markdown } from './Markdown'
 import { useAgent, type ChatItem } from './useAgent'
 import { useThreads } from './useThreads'
 
@@ -127,7 +128,11 @@ function ChatEntry({
     case 'user':
       return <div className="bubble user">{item.text}</div>
     case 'assistant':
-      return <div className="bubble assistant">{item.text || '…'}</div>
+      return (
+        <div className="bubble assistant markdown">
+          {item.text ? <Markdown text={item.text} /> : '…'}
+        </div>
+      )
     case 'tool':
       return (
         <div className="tool">
