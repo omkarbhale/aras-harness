@@ -335,54 +335,262 @@ button.ghost.danger:hover {
   gap: 10px;
 }
 
+.chat-log > * {
+  /* Keep natural height and let the log scroll. Without this, flex children with
+     overflow:hidden (the tool cards) get an auto min-height of 0 and collapse to a
+     thin line once the log overflows, instead of the container scrolling. */
+  flex-shrink: 0;
+  animation: entry-in 0.16s ease both;
+}
+
+@keyframes entry-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Conversational messages (user / agent) */
+.msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 82%;
+}
+
+.msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.msg-assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.msg-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin: 0 4px 3px;
+}
+
 .bubble {
-  max-width: 80%;
+  max-width: 100%;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.5;
 }
 
 .bubble.user {
-  align-self: flex-end;
   background: var(--accent);
   color: #11111b;
+  border-bottom-right-radius: 4px;
 }
 
 .bubble.assistant {
-  align-self: flex-start;
   background: var(--panel);
   border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
 }
 
-.tool {
-  align-self: flex-start;
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Tool calls — full-width cards, deliberately unlike chat bubbles */
+.tool-call {
+  align-self: stretch;
   background: var(--bg-alt);
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent-dim);
+  border-left: 4px solid var(--accent);
   border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  max-width: 80%;
+  overflow: hidden;
+  margin: 4px 0;
 }
 
-.tool code {
-  color: var(--yellow);
+.tool-call.error {
+  border-color: var(--red);
+  border-left-color: var(--red);
 }
 
-.tool pre {
-  margin: 6px 0 0;
-  max-height: 160px;
-  overflow: auto;
+/* Solid, clearly-visible header so the card reads as a tool block, not a message */
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: #2e3350;
+  border-bottom: 1px solid var(--accent-dim);
+}
+
+.tool-call.error .tool-call-header {
+  background: #46283a;
+  border-bottom-color: var(--red);
+}
+
+.tool-call-icon {
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tool-call-kind {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  background: rgba(137, 180, 250, 0.16);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.tool-call.error .tool-call-kind {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.16);
+}
+
+.tool-call-name {
+  flex: 1;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+
+.tool-section {
+  padding: 10px 12px;
+}
+
+.tool-section + .tool-section,
+.tool-call-header + .tool-section {
+  border-top: 1px solid var(--border);
+}
+
+.tool-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+details.tool-section > summary.tool-section-label {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+details.tool-section > summary.tool-section-label::-webkit-details-marker {
+  display: none;
+}
+
+details.tool-section > summary.tool-section-label::before {
+  content: '▸ ';
   color: var(--muted);
 }
 
+details.tool-section[open] > summary.tool-section-label::before {
+  content: '▾ ';
+}
+
+/* Shared monospace code block for AML / OData / JSON */
+.code {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow: auto;
+  max-height: 340px;
+  white-space: pre;
+  tab-size: 2;
+}
+
+details.tool-section > summary + .code {
+  margin-top: 6px;
+}
+
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--accent-dim);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Write-approval card */
 .approval {
-  align-self: flex-start;
+  align-self: stretch;
   background: #2a1f33;
   border: 1px solid var(--yellow);
+  border-left: 3px solid var(--yellow);
   border-radius: 8px;
   padding: 12px;
-  max-width: 80%;
+}
+
+.approval.resolved {
+  opacity: 0.85;
+}
+
+.approval-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.approval-icon {
+  color: var(--yellow);
+}
+
+.approval-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.approval-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .chat-input {
