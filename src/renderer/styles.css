@@ -417,6 +417,119 @@ button.ghost.danger:hover {
   }
 }
 
+/* Rendered Markdown inside the assistant bubble. The bubble's pre-wrap is for
+   plain text; block layout handles spacing here, so reset to normal flow. */
+.bubble.markdown {
+  white-space: normal;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 8px 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 14px 0 8px;
+  line-height: 1.25;
+}
+
+.markdown h1 { font-size: 1.4em; }
+.markdown h2 { font-size: 1.25em; }
+.markdown h3 { font-size: 1.1em; }
+.markdown h4,
+.markdown h5,
+.markdown h6 { font-size: 1em; }
+
+.markdown ul,
+.markdown ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.markdown li {
+  margin: 3px 0;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 3px 0;
+}
+
+.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.markdown blockquote {
+  margin: 8px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--accent-dim);
+  color: var(--muted);
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.markdown del {
+  color: var(--muted);
+}
+
+/* Inline code (any code not inside a fenced block). */
+.markdown :not(pre) > code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.9em;
+  color: var(--yellow);
+}
+
+.markdown pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.9em;
+  white-space: pre;
+  color: var(--text);
+}
+
+/* GFM tables. Override the global result-grid rules (nowrap + truncation),
+   which hurt readability inside a chat bubble. */
+.markdown table {
+  width: auto;
+  margin: 8px 0;
+  font-size: 0.95em;
+}
+
+.markdown th,
+.markdown td {
+  white-space: normal;
+  max-width: none;
+}
+
 /* Tool calls — full-width cards, deliberately unlike chat bubbles */
 .tool-call {
   align-self: stretch;

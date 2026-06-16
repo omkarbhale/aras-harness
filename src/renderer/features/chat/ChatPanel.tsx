@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChatSidebar } from './ChatSidebar'
 import { formatAml } from './formatAml'
+import { Markdown } from './Markdown'
 import { useAgent, type ChatItem } from './useAgent'
 import { useThreads } from './useThreads'
 
@@ -137,8 +138,8 @@ function ChatEntry({
       return (
         <div className="msg msg-assistant">
           <div className="msg-role">Agent</div>
-          <div className="bubble assistant">
-            {item.text || (item.live ? '' : '…')}
+          <div className="bubble assistant markdown">
+            {item.text ? <Markdown text={item.text} /> : item.live ? '' : '…'}
             {item.live && <span className="caret" />}
           </div>
         </div>
