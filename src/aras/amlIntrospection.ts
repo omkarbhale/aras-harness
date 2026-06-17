@@ -12,7 +12,12 @@ const WRITE_ACTIONS = new Set([
   // (and must NOT go down the read-retry path, which would re-fire the mutation).
   'lock',
   'unlock',
+  // Lifecycle promotion. Aras's canonical action is `promoteItem`; bare `promote` is
+  // not a real server action (it gets dispatched as a missing server Method), but keep
+  // it gated anyway so a typo can never slip down the read path.
   'promote',
+  'promoteitem',
+  'resetlifecycle',
   'recover'
 ])
 

@@ -6,12 +6,21 @@ describe('isWriteAml', () => {
     expect(isWriteAml('<AML><Item type="Part" action="get" select="id" /></AML>')).toBe(false)
   })
 
-  it.each(['add', 'update', 'edit', 'delete', 'create', 'lock', 'unlock', 'promote', 'recover'])(
-    'flags action="%s" as a write',
-    (action) => {
-      expect(isWriteAml(`<AML><Item type="Part" action="${action}" /></AML>`)).toBe(true)
-    }
-  )
+  it.each([
+    'add',
+    'update',
+    'edit',
+    'delete',
+    'create',
+    'lock',
+    'unlock',
+    'promote',
+    'promoteItem',
+    'resetLifecycle',
+    'recover'
+  ])('flags action="%s" as a write', (action) => {
+    expect(isWriteAml(`<AML><Item type="Part" action="${action}" /></AML>`)).toBe(true)
+  })
 
   it('flags a write even when mixed with gets', () => {
     const aml =
