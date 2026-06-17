@@ -55,7 +55,20 @@ describe('resolveCredentials', () => {
     expect(creds.username).toBe('admin')
   })
 
-  it('password precedence: inline > ARAS_PASSWORD_<P> > ARAS_PASSWORD', () => {
+  it('uses a password stored inline in the profile', () => {
+    const profiles = { dev: { ...PROFILES.dev, password: 'fromfile' } }
+    expect(resolveCredentials({ profile: 'dev' }, profiles, {}).password).toBe('fromfile')
+  })
+
+  it('password precedence: inline > profile.password > ARAS_PASSWORD_<P> > ARAS_PASSWORD', () => {
+    const profiles = { dev: { ...PROFILES.dev, password: 'fromfile' } }
+    expect(resolveCredentials({ profile: 'dev', password: 'inline' }, profiles, {}).password).toBe('inline')
+    expect(
+      resolveCredentials({ profile: 'dev' }, profiles, { ARAS_PASSWORD_DEV: 'env' }).password
+    ).toBe('fromfile')
+  })
+
+  it('password precedence without a stored profile password: ARAS_PASSWORD_<P> > ARAS_PASSWORD', () => {
     expect(
       resolveCredentials({ profile: 'dev', password: 'inline' }, PROFILES, {
         ARAS_PASSWORD_DEV: 'perprofile',

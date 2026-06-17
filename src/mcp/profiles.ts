@@ -3,11 +3,14 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ArasCredentials } from '../aras'
 
-/** A saved connection profile — non-secret fields only. Passwords come from env. */
+/** A saved connection profile. `password` may be stored inline (plaintext) for
+ *  convenience on trusted/dev machines, or omitted to source it from env instead. */
 export interface ProfileConfig {
   url: string
   database: string
   username: string
+  /** Optional plaintext password. If set, it's used unless overridden inline. */
+  password?: string
 }
 
 interface ProfilesFile {
@@ -56,7 +59,8 @@ export function passwordEnvKey(profile: string): string {
  *    overrides win where provided.
  *  - no profile, no inline: fall back to the default env profile
  *    (ARAS_URL / ARAS_DATABASE / ARAS_USERNAME).
- *  - password: inline `password` > `ARAS_PASSWORD_<PROFILE>` > `ARAS_PASSWORD`.
+ *  - password: inline `password` > the profile's stored `password` >
+ *    `ARAS_PASSWORD_<PROFILE>` > `ARAS_PASSWORD`.
  *
  * Throws a readable error listing exactly what's missing.
  */
@@ -80,6 +84,7 @@ export function resolveCredentials(
   const username = input.username ?? saved?.username ?? env.ARAS_USERNAME
   const password =
     input.password ??
+    saved?.password ??
     (name ? env[passwordEnvKey(name)] : undefined) ??
     env.ARAS_PASSWORD
 

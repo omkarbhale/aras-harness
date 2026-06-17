@@ -52,13 +52,18 @@ Three ways to supply credentials, in precedence order per field:
    ```json
    {
      "profiles": {
-       "dev":  { "url": "http://localhost/InnovatorServer", "database": "InnovatorSolutions", "username": "admin" },
-       "prod": { "url": "https://plm.corp.com/Server",      "database": "ProdDB",            "username": "svc" }
+       "dev":  { "url": "http://localhost/12sp9",     "database": "12sp9",  "username": "admin", "password": "innovator" },
+       "prod": { "url": "https://plm.corp.com/Server", "database": "ProdDB", "username": "svc" }
      }
    }
    ```
-   Then `aras_connect({ profile: "dev" })`. Passwords come from `ARAS_PASSWORD_DEV` (or
-   `ARAS_PASSWORD`) — never stored in the file.
+   Then `aras_connect({ profile: "dev" })`. A profile's `password` may be stored inline
+   (plaintext — convenient on a trusted dev box) **or** omitted and supplied via
+   `ARAS_PASSWORD_DEV` / `ARAS_PASSWORD` env vars. Per field, inline `aras_connect` args
+   override the profile, which overrides env.
+
+   > Inline passwords are plaintext on disk — keep `profiles.json` out of version control
+   > (and prefer env vars for shared/prod instances).
 3. **Default env profile**: `ARAS_URL`, `ARAS_DATABASE`, `ARAS_USERNAME`, `ARAS_PASSWORD`,
    used when `aras_connect` is called with no profile and no inline fields.
 
