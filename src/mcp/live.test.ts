@@ -128,5 +128,5 @@ w('live Aras write round-trip (scratch DB only)', () => {
       `<AML><Item type="${type}" action="get" select="id" id="${id}"/></AML>`
     )
     expect(JSON.parse(verify.text).count).toBe(0)
-  })
+  }, 60_000)
 })
