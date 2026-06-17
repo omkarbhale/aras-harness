@@ -58,6 +58,33 @@ function collectItems(node: unknown, out: XmlNode[]): void {
   }
 }
 
+function attrKeyedName(o: XmlNode | undefined): string | undefined {
+  const k = o?.['@_keyed_name']
+  return k === undefined ? undefined : String(k)
+}
+
+/**
+ * Resolve an item-valued property element to `{ id, keyedName }`.
+ *
+ * Aras serializes item references three ways, all of which used to collapse to the
+ * literal `"[item]"` (hiding the real value):
+ *   - text-valued ref:  `<source_id keyed_name="X" type="..">GUID</source_id>`
+ *   - expanded ref:     `<related_id keyed_name="X"><Item id="GUID">..</Item></related_id>`
+ *   - empty value:      `<email is_null="1" />`  (or a plain empty element)
+ */
+function resolveItemValue(value: XmlNode): { id: string; keyedName?: string } {
+  if (value['#text'] !== undefined) {
+    return { id: String(value['#text']), keyedName: attrKeyedName(value) }
+  }
+  const nested = value['Item']
+  if (nested !== undefined) {
+    const inner = (Array.isArray(nested) ? nested[0] : nested) as XmlNode | undefined
+    return { id: String(inner?.['@_id'] ?? ''), keyedName: attrKeyedName(value) ?? attrKeyedName(inner) }
+  }
+  // Empty element (e.g. is_null="1") — genuinely no value, NOT a placeholder.
+  return { id: '' }
+}
+
 function toItem(node: XmlNode): AmlItem {
   const id = String(node['@_id'] ?? '')
   const type = String(node['@_type'] ?? '')
@@ -68,9 +95,13 @@ function toItem(node: XmlNode): AmlItem {
     if (value === null || value === undefined) {
       properties[key] = ''
     } else if (typeof value === 'object' && !Array.isArray(value)) {
-      const text = (value as XmlNode)['#text']
-      // Nested relationship Items collapse to a placeholder; full nesting is a later concern.
-      properties[key] = text !== undefined ? String(text) : '[item]'
+      const { id: refId, keyedName } = resolveItemValue(value as XmlNode)
+      properties[key] = refId
+      // Carry the human-readable label alongside the id when Aras provides one and it
+      // adds information (the id itself is opaque GUID).
+      if (keyedName !== undefined && keyedName !== '' && keyedName !== refId) {
+        properties[`${key}@keyed_name`] = keyedName
+      }
     } else if (Array.isArray(value)) {
       properties[key] = `[${value.length} items]`
     } else {
