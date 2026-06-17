@@ -51,6 +51,59 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+// OData entity payloads carry navigation/association/context annotations on every
+// property — typically several times the size of the useful data. Drop them, but keep
+// the human label (@aras.keyed_name), the real id (@aras.id), and paging hints.
+const ODATA_NOISE =
+  /@odata\.(associationLink|navigationLink|context|type|editLink|id|mediaReadLink|mediaContentType|mediaEtag)/
+
+function stripODataNoise(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripODataNoise)
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (ODATA_NOISE.test(k)) continue
+      out[k] = stripODataNoise(v)
+    }
+    return out
+  }
+  return node
+}
+
+/**
+ * Render an OData payload into a size-bounded string that is ALWAYS valid JSON.
+ *
+ * The old `JSON.stringify(result).slice(0, N)` cut mid-string and produced unparseable
+ * output. This strips annotation noise first, then — if still over budget — drops whole
+ * rows from `value[]` and records what was dropped, so callers can page deliberately
+ * (OData `$top`/`$skip`/`$select`) instead of guessing at a broken tail.
+ */
+function summarizeOData(payload: unknown, maxChars: number): string {
+  const clean = stripODataNoise(payload)
+  let json = JSON.stringify(clean)
+  if (json.length <= maxChars) return json
+
+  if (clean && typeof clean === 'object' && Array.isArray((clean as { value?: unknown[] }).value)) {
+    const obj = clean as Record<string, unknown>
+    const rows = obj.value as unknown[]
+    let kept = rows.length
+    while (kept > 0) {
+      json = JSON.stringify({
+        ...obj,
+        value: rows.slice(0, kept),
+        '@truncated': { returned: kept, of: rows.length, hint: 'narrow with $select or page with $top/$skip' }
+      })
+      if (json.length <= maxChars) return json
+      kept = kept > 10 ? Math.floor(kept / 2) : kept - 1
+    }
+    return JSON.stringify({
+      '@truncated': { returned: 0, of: rows.length, hint: 'rows too large; reduce fields with $select' }
+    })
+  }
+
+  return JSON.stringify({ '@truncated': true, hint: 'OData response exceeded size budget; narrow the query' })
+}
+
 /**
  * The Aras tool implementations, decoupled from the MCP wire layer so they can be
  * unit-tested directly against a {@link ConnectionManager} backed by a mock client.
@@ -172,7 +225,7 @@ export class ArasTools {
         this.timeoutMs,
         'aras_run_odata'
       )
-      return ok(JSON.stringify(result).slice(0, ODATA_RESULT_CHARS))
+      return ok(summarizeOData(result, ODATA_RESULT_CHARS))
     } catch (e) {
       return err(messageOf(e))
     }

@@ -11,6 +11,8 @@ class FakeClient {
   testCalls = 0
   /** Per-test override for what runAml returns (keyed loosely by content). */
   amlHandler: (aml: string) => Promise<AmlResult> = async () => result([])
+  /** Per-test override for what runODataQuery returns. */
+  odataHandler: (path: string) => Promise<unknown> = async () => ({ value: [{ item_number: 'P-1' }] })
 
   async runAml(aml: string): Promise<AmlResult> {
     this.amlCalls.push(aml)
@@ -18,7 +20,7 @@ class FakeClient {
   }
   async runODataQuery(path: string): Promise<unknown> {
     this.odataCalls.push(path)
-    return { value: [{ item_number: 'P-1' }] }
+    return this.odataHandler(path)
   }
   async testConnection(): Promise<{ latencyMs: number }> {
     this.testCalls++
@@ -154,6 +156,43 @@ describe('queries', () => {
     expect(r.isError).toBeFalsy()
     expect(fake.odataCalls).toEqual(['Part?$top=1'])
     expect(r.text).toMatch(/P-1/)
+  })
+
+  it('aras_run_odata strips @odata navigation noise but keeps @aras labels', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.odataHandler = async () => ({
+      '@odata.context': 'http://x/$metadata#Member',
+      value: [
+        {
+          '@odata.id': "Member('1')",
+          'related_id@odata.associationLink': 'Member(1)/related_id/$ref',
+          'related_id@odata.navigationLink': 'Member(1)/related_id',
+          'related_id@aras.keyed_name': 'Innovator Admin',
+          'related_id@aras.id': 'DBA5'
+        }
+      ]
+    })
+    const r = await tools.runOData('Member')
+    const parsed = JSON.parse(r.text) // must be valid JSON
+    const row = parsed.value[0]
+    expect(row['related_id@aras.keyed_name']).toBe('Innovator Admin')
+    expect(row['related_id@aras.id']).toBe('DBA5')
+    expect(Object.keys(row).some((k) => k.includes('odata.associationLink'))).toBe(false)
+    expect(Object.keys(row).some((k) => k.includes('odata.navigationLink'))).toBe(false)
+  })
+
+  it('aras_run_odata truncates large value[] to valid JSON with a marker', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    const rows = Array.from({ length: 2000 }, (_, i) => ({ name: `identity-number-${i}-with-padding` }))
+    fake.odataHandler = async () => ({ value: rows })
+    const r = await tools.runOData('Identity')
+    const parsed = JSON.parse(r.text) // valid JSON despite truncation
+    expect(parsed['@truncated'].of).toBe(2000)
+    expect(parsed['@truncated'].returned).toBeLessThan(2000)
+    expect(parsed.value.length).toBe(parsed['@truncated'].returned)
+    expect(r.text.length).toBeLessThanOrEqual(8000)
   })
 })
 

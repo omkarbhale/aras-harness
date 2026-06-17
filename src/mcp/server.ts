@@ -97,7 +97,10 @@ export function createServer(tools: ArasTools): McpServer {
       title: 'Run OData query (read-only)',
       description:
         'Run a read-only OData GET against /server/odata, e.g. ' +
-        '`Part?$top=10&$select=item_number,name&$filter=...`.',
+        '`Part?$top=10&$select=item_number,name&$filter=...`. ' +
+        'Verbose @odata navigation annotations are stripped (the @aras.keyed_name / @aras.id ' +
+        'labels are kept); oversized responses are truncated at a row boundary as valid JSON with ' +
+        'a `@truncated` marker — page with $top/$skip and trim fields with $select.',
       inputSchema: {
         query: z.string().describe('OData path + query appended to /server/odata/')
       },
