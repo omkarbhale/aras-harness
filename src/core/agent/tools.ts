@@ -151,10 +151,23 @@ export function createArasTools(deps: AgentToolDeps) {
 
   const introspectItemType = tool(
     async ({ name }: { name: string }) => {
+      // Confirm the ItemType exists (and grab its label). An empty result now comes back
+      // as count 0 rather than a fault, so this branch is reachable.
+      const typeAml =
+        `<AML><Item type="ItemType" action="get" select="name,label"><name>${name}</name></Item></AML>`
+      const typeRes = await withTimeout(
+        retry(async () => (await client()).runAml(typeAml, sig())),
+        timeoutMs,
+        'introspect_itemtype'
+      )
+      if (typeRes.count === 0) return `No ItemType named "${name}" was found.`
+
+      // Property definitions whose source is this ItemType. Queried directly (not as nested
+      // <Relationships>, which the parser collapses to a "[item]" placeholder) so the agent
+      // actually sees property name + data_type for each column.
       const propsAml =
-        `<AML><Item type="ItemType" action="get" select="name,label">` +
-        `<name>${name}</name>` +
-        `<Relationships><Item type="Property" action="get" select="name,label,data_type,data_source" /></Relationships>` +
+        `<AML><Item type="Property" action="get" select="name,label,data_type,data_source">` +
+        `<source_id><Item type="ItemType" action="get" select="id"><name>${name}</name></Item></source_id>` +
         `</Item></AML>`
       const props = await withTimeout(
         retry(async () => (await client()).runAml(propsAml, sig())),
@@ -181,7 +194,7 @@ export function createArasTools(deps: AgentToolDeps) {
         rels = []
       }
 
-      return summarizeResult([...props.items, ...rels])
+      return summarizeResult([...typeRes.items, ...props.items, ...rels])
     },
     {
       name: 'introspect_itemtype',
