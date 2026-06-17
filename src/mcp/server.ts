@@ -81,8 +81,10 @@ export function createServer(tools: ArasTools): McpServer {
     {
       title: 'Run AML write (mutating)',
       description:
-        'Execute MUTATING AML (add/update/delete/promote/lock/...) against the active instance. ' +
-        'Runs once, never retried. Requires a mutating action; use aras_run_query for reads.',
+        'Execute MUTATING AML (add/update/delete/promoteItem/lock/unlock/...) against the active ' +
+        'instance. Runs once, never retried. Requires a recognized mutating action; use ' +
+        'aras_run_query for reads. Note: custom server-method actions are not recognized as ' +
+        'mutating — invoke those with care.',
       inputSchema: {
         aml: z.string().describe('A complete mutating AML document wrapped in <AML>...</AML>.')
       },
