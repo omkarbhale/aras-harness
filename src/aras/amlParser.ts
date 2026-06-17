@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
-import type { AmlItem, AmlResult } from './types'
+import type { AmlItem, AmlPageInfo, AmlResult } from './types'
 import { ArasFaultError } from './errors'
 
 const parser = new XMLParser({
@@ -112,6 +112,38 @@ function toItem(node: XmlNode): AmlItem {
 }
 
 /**
+ * Extract paging info from a paged response. Aras reports it twice: as
+ * `<Message><event name="pagemax" .../></Message>` (sibling of `<Result>`) and as
+ * `page`/`pagemax`/`itemmax` attributes on each result Item. We prefer the events
+ * (single source) and fall back to item attributes; the current page number only
+ * lives on the items. Returns undefined for non-paged queries.
+ */
+function extractPageInfo(tree: XmlNode, itemNodes: XmlNode[]): AmlPageInfo | undefined {
+  let pageMax: number | undefined
+  let itemMax: number | undefined
+
+  const message = findFirst(tree, ['Message'])
+  if (message) {
+    for (const ev of asArray(message['event'])) {
+      const e = ev as XmlNode
+      const name = e['@_name']
+      if (name === 'pagemax') pageMax = Number(e['@_value'])
+      else if (name === 'itemmax') itemMax = Number(e['@_value'])
+    }
+  }
+
+  const first = itemNodes[0]
+  if (pageMax === undefined && first?.['@_pagemax'] !== undefined) pageMax = Number(first['@_pagemax'])
+  if (itemMax === undefined && first?.['@_itemmax'] !== undefined) itemMax = Number(first['@_itemmax'])
+  if (pageMax === undefined || itemMax === undefined || Number.isNaN(pageMax) || Number.isNaN(itemMax)) {
+    return undefined
+  }
+
+  const page = first?.['@_page'] !== undefined ? Number(first['@_page']) : 1
+  return { page: Number.isNaN(page) ? 1 : page, pageMax, itemMax }
+}
+
+/**
  * Parse an Aras SOAP/AML response. Throws {@link ArasFaultError} on a SOAP Fault,
  * otherwise returns the flattened list of items.
  */
@@ -138,5 +170,6 @@ export function parseAmlResponse(xml: string): AmlResult {
   const itemNodes: XmlNode[] = []
   collectItems(tree, itemNodes)
   const items = itemNodes.map(toItem)
-  return { raw: xml, items, count: items.length }
+  const pageInfo = extractPageInfo(tree, itemNodes)
+  return { raw: xml, items, count: items.length, ...(pageInfo ? { pageInfo } : {}) }
 }

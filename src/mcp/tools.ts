@@ -1,4 +1,4 @@
-import { withRetry, isWriteAml, summarizeAml, type AmlItem } from '../aras'
+import { withRetry, isWriteAml, summarizeAml, type AmlItem, type AmlPageInfo, type AmlResult } from '../aras'
 import type { ConnectionManager } from './connection'
 import { loadProfiles, resolveCredentials, type ConnectInput, type ProfileConfig } from './profiles'
 
@@ -36,12 +36,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   return Promise.race([promise, timeout]).finally(() => clearTimeout(id))
 }
 
-function summarizeItems(items: AmlItem[]): string {
-  const truncated = items.slice(0, MAX_ITEMS_IN_RESULT)
+function summarizeItems(items: AmlItem[], pageInfo?: AmlPageInfo): string {
+  const shown = items.slice(0, MAX_ITEMS_IN_RESULT)
   return JSON.stringify({
     count: items.length,
     truncated: items.length > MAX_ITEMS_IN_RESULT,
-    items: truncated
+    // When the query is paged, tell the caller the true total + how to page further.
+    ...(pageInfo ? { page: pageInfo } : {}),
+    items: shown
   })
 }
 
@@ -78,15 +80,10 @@ export class ArasTools {
     return withRetry(fn, undefined, { maxAttempts: this.maxAttempts })
   }
 
-  /** Read-only AML retried with backoff, summarized. */
-  private async readAml(aml: string, label: string): Promise<AmlItem[]> {
+  /** Read-only AML retried with backoff. */
+  private async readAml(aml: string, label: string): Promise<AmlResult> {
     const client = this.conn.getClient()
-    const result = await withTimeout(
-      this.retry(() => client.runAml(aml)),
-      this.timeoutMs,
-      label
-    )
-    return result.items
+    return withTimeout(this.retry(() => client.runAml(aml)), this.timeoutMs, label)
   }
 
   // --- connection ---------------------------------------------------------
@@ -146,7 +143,8 @@ export class ArasTools {
       )
     }
     try {
-      return ok(summarizeItems(await this.readAml(aml, 'aras_run_query')))
+      const result = await this.readAml(aml, 'aras_run_query')
+      return ok(summarizeItems(result.items, result.pageInfo))
     } catch (e) {
       return err(messageOf(e))
     }
@@ -184,7 +182,7 @@ export class ArasTools {
 
   async listItemTypes(): Promise<ToolResult> {
     try {
-      const items = await this.readAml(
+      const { items } = await this.readAml(
         '<AML><Item type="ItemType" action="get" select="name,label" orderBy="name" /></AML>',
         'aras_list_itemtypes'
       )
@@ -197,7 +195,7 @@ export class ArasTools {
 
   async introspectItemType(name: string): Promise<ToolResult> {
     try {
-      const typeItems = await this.readAml(
+      const { items: typeItems } = await this.readAml(
         `<AML><Item type="ItemType" action="get" select="name,label"><name>${name}</name></Item></AML>`,
         'aras_introspect_itemtype'
       )
@@ -205,7 +203,7 @@ export class ArasTools {
 
       // Properties sourced by this ItemType (queried directly, not nested — the parser
       // collapses nested relationship Items to a placeholder).
-      const props = await this.readAml(
+      const { items: props } = await this.readAml(
         `<AML><Item type="Property" action="get" select="name,label,data_type,data_source">` +
           `<source_id><Item type="ItemType" action="get" select="id"><name>${name}</name></Item></source_id>` +
           `</Item></AML>`,
@@ -243,7 +241,7 @@ export class ArasTools {
 
   async getMethod(name: string): Promise<ToolResult> {
     try {
-      const items = await this.readAml(
+      const { items } = await this.readAml(
         `<AML><Item type="Method" action="get" select="name,method_type,method_code"><name>${name}</name></Item></AML>`,
         'aras_get_method'
       )

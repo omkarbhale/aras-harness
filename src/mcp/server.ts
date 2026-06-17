@@ -64,7 +64,10 @@ export function createServer(tools: ArasTools): McpServer {
       description:
         'Run a read-only AML query (action="get") against the active instance. Rejects mutating AML — ' +
         'use aras_run_write for changes. Pass a complete document, e.g. ' +
-        '<AML><Item type="Part" action="get" select="id,item_number" maxRecords="25"/></AML>.',
+        '<AML><Item type="Part" action="get" select="id,item_number" maxRecords="25"/></AML>. ' +
+        'Results are capped at 50 items; for larger sets page with the AML attributes ' +
+        '`page` + `pagesize` (1-based) — the response then includes a `page` block ' +
+        '{ page, pageMax, itemMax } so you know the true total and how many pages remain.',
       inputSchema: {
         aml: z.string().describe('A complete read-only AML document wrapped in <AML>...</AML>.')
       },

@@ -59,6 +59,26 @@ describe('parseAmlResponse — item-reference properties', () => {
   })
 })
 
+describe('parseAmlResponse — paging', () => {
+  it('extracts page/pageMax/itemMax from a paged response', () => {
+    const item = (id: string) =>
+      `<Item type="Identity" id="${id}" page="2" pagemax="17" itemmax="51"><name>${id}</name></Item>`
+    const xml = soap(
+      `<Result>${item('A')}${item('B')}</Result>` +
+        '<Message><event name="pagemax" value="17" /><event name="itemmax" value="51" />' +
+        '<event name="items_with_no_access_count" value="0" /></Message>'
+    )
+    const { pageInfo, count } = parseAmlResponse(xml)
+    expect(count).toBe(2)
+    expect(pageInfo).toEqual({ page: 2, pageMax: 17, itemMax: 51 })
+  })
+
+  it('omits pageInfo for a non-paged response', () => {
+    const xml = soap('<Result><Item type="Part" id="A"><name>x</name></Item></Result>')
+    expect(parseAmlResponse(xml).pageInfo).toBeUndefined()
+  })
+})
+
 describe('parseAmlResponse — faults', () => {
   it('normalizes "No items found" to an empty result', () => {
     const xml = soap(

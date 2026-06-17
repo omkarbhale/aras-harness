@@ -26,9 +26,12 @@ class FakeClient {
   }
 }
 
-function result(items: { id?: string; type?: string; properties?: Record<string, string> }[]): AmlResult {
+function result(
+  items: { id?: string; type?: string; properties?: Record<string, string> }[],
+  pageInfo?: AmlResult['pageInfo']
+): AmlResult {
   const full = items.map((i) => ({ id: i.id ?? '', type: i.type ?? '', properties: i.properties ?? {} }))
-  return { raw: '<xml/>', items: full, count: full.length }
+  return { raw: '<xml/>', items: full, count: full.length, ...(pageInfo ? { pageInfo } : {}) }
 }
 
 /** Build ArasTools wired to a FakeClient, already "connected". */
@@ -112,6 +115,25 @@ describe('queries', () => {
     const parsed = JSON.parse(r.text)
     expect(parsed.count).toBe(2)
     expect(parsed.items[0].properties.item_number).toBe('P-1')
+  })
+
+  it('aras_run_query surfaces page metadata when the query is paged', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () =>
+      result([{ id: 'a', type: 'Identity', properties: { name: 'A' } }], { page: 2, pageMax: 17, itemMax: 51 })
+    const r = await tools.runQuery(
+      '<AML><Item type="Identity" action="get" select="name" page="2" pagesize="3"/></AML>'
+    )
+    expect(JSON.parse(r.text).page).toEqual({ page: 2, pageMax: 17, itemMax: 51 })
+  })
+
+  it('aras_run_query omits page metadata for non-paged queries', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([{ id: 'a', type: 'Part', properties: {} }])
+    const r = await tools.runQuery('<AML><Item type="Part" action="get" select="id"/></AML>')
+    expect(JSON.parse(r.text).page).toBeUndefined()
   })
 
   it('aras_run_query surfaces client errors as an error result', async () => {
