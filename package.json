@@ -1,56 +1,39 @@
 {
-  "name": "aras-harness",
-  "version": "0.1.0",
-  "description": "Agentic developer harness for Aras Innovator (AML/OData) — a coding-agent-style assistant + query workbench.",
+  "name": "aras-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for Aras Innovator (v12+) — AML/OData query, schema introspection, and method access for coding agents.",
   "author": "",
   "license": "MIT",
-  "main": "out/main/index.js",
+  "type": "module",
   "bin": {
-    "aras": "dist/cli/index.js"
+    "aras-mcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
-    "dev": "npm run rebuild:electron && electron-vite dev",
-    "build": "npm run rebuild:electron && electron-vite build",
-    "preview": "electron-vite preview",
-    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
-    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "npm run rebuild:node && vitest run",
-    "test:watch": "npm run rebuild:node && vitest",
-    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
-    "rebuild:node": "npm rebuild better-sqlite3",
-    "build:cli": "tsup src/cli/index.ts --out-dir dist/cli --format cjs --target node20 --tsconfig tsconfig.node.json --external better-sqlite3 --external keytar --external electron --external electron-store --shims --clean",
-    "cli": "npm run rebuild:node && npm run build:cli && node dist/cli/index.js"
+    "build": "tsup src/mcp/server.ts --format esm --target node20 --out-dir dist --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/server.js",
+    "dev": "tsx src/mcp/server.ts"
   },
   "dependencies": {
-    "@langchain/anthropic": "^0.3.11",
-    "@langchain/core": "^0.3.29",
-    "@langchain/langgraph": "^0.2.39",
-    "@langchain/ollama": "^0.1.4",
-    "@langchain/openai": "^0.3.17",
-    "better-sqlite3": "^12.10.0",
-    "commander": "^15.0.0",
-    "electron-store": "^8.2.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "fast-xml-parser": "^4.5.1",
-    "keytar": "^7.9.0",
-    "react-markdown": "^9.1.0",
-    "remark-gfm": "^4.0.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.17.10",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.3.0",
-    "electron-vite": "^2.3.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "tsup": "^8.5.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11",
     "vitest": "^2.1.8"
   }
 }

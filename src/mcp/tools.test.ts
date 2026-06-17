@@ -1,0 +1,213 @@
+import { describe, it, expect } from 'vitest'
+import type { ArasClient } from '../aras'
+import type { AmlResult } from '../aras'
+import { ConnectionManager } from './connection'
+import { ArasTools } from './tools'
+
+/** Minimal stand-in for ArasClient that records calls and returns canned results. */
+class FakeClient {
+  amlCalls: string[] = []
+  odataCalls: string[] = []
+  testCalls = 0
+  /** Per-test override for what runAml returns (keyed loosely by content). */
+  amlHandler: (aml: string) => Promise<AmlResult> = async () => result([])
+
+  async runAml(aml: string): Promise<AmlResult> {
+    this.amlCalls.push(aml)
+    return this.amlHandler(aml)
+  }
+  async runODataQuery(path: string): Promise<unknown> {
+    this.odataCalls.push(path)
+    return { value: [{ item_number: 'P-1' }] }
+  }
+  async testConnection(): Promise<{ latencyMs: number }> {
+    this.testCalls++
+    return { latencyMs: 7 }
+  }
+}
+
+function result(items: { id?: string; type?: string; properties?: Record<string, string> }[]): AmlResult {
+  const full = items.map((i) => ({ id: i.id ?? '', type: i.type ?? '', properties: i.properties ?? {} }))
+  return { raw: '<xml/>', items: full, count: full.length }
+}
+
+/** Build ArasTools wired to a FakeClient, already "connected". */
+function setup(): { tools: ArasTools; fake: FakeClient; conn: ConnectionManager } {
+  const fake = new FakeClient()
+  const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+  const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+  return { tools, fake, conn }
+}
+
+async function connect(tools: ArasTools): Promise<void> {
+  await tools.connect({ url: 'http://x/Server', database: 'D', username: 'u', password: 'p' })
+}
+
+describe('ArasTools.connect', () => {
+  it('connects with inline credentials and reports latency', async () => {
+    const { tools, fake } = setup()
+    const r = await tools.connect({ url: 'http://x/Server', database: 'D', username: 'u', password: 'p' })
+    expect(r.isError).toBeFalsy()
+    expect(fake.testCalls).toBe(1)
+    expect(JSON.parse(r.text)).toMatchObject({ connected: true, database: 'D', latencyMs: 7 })
+  })
+
+  it('returns an error result when credentials are incomplete', async () => {
+    const { tools } = setup()
+    const r = await tools.connect({ url: 'http://x/Server' })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/missing: database, username, password/)
+  })
+})
+
+describe('connection guard', () => {
+  it('tools fail with a readable error before connecting', async () => {
+    const { tools } = setup()
+    const r = await tools.listItemTypes()
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/No active Aras connection/)
+  })
+})
+
+describe('read/write split', () => {
+  it('aras_run_query rejects mutating AML', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    const r = await tools.runQuery('<AML><Item type="Part" action="update" id="1"><name>x</name></Item></AML>')
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/aras_run_write/)
+    expect(fake.amlCalls).toHaveLength(0) // never sent to the server
+  })
+
+  it('aras_run_write rejects non-mutating AML', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    const r = await tools.runWrite('<AML><Item type="Part" action="get" select="id"/></AML>')
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/aras_run_query/)
+    expect(fake.amlCalls).toHaveLength(0)
+  })
+
+  it('aras_run_write runs the mutation exactly once (never retried)', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([{ id: 'NEW', type: 'Part', properties: { item_number: 'P-9' } }])
+    const r = await tools.runWrite('<AML><Item type="Part" action="add"><item_number>P-9</item_number></Item></AML>')
+    expect(r.isError).toBeFalsy()
+    expect(fake.amlCalls).toHaveLength(1)
+    expect(JSON.parse(r.text)).toMatchObject({ count: 1 })
+  })
+})
+
+describe('queries', () => {
+  it('aras_run_query summarizes returned items', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () =>
+      result([
+        { id: 'a', type: 'Part', properties: { item_number: 'P-1' } },
+        { id: 'b', type: 'Part', properties: { item_number: 'P-2' } }
+      ])
+    const r = await tools.runQuery('<AML><Item type="Part" action="get" select="item_number"/></AML>')
+    const parsed = JSON.parse(r.text)
+    expect(parsed.count).toBe(2)
+    expect(parsed.items[0].properties.item_number).toBe('P-1')
+  })
+
+  it('aras_run_query surfaces client errors as an error result', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => {
+      throw new Error('boom from server')
+    }
+    const r = await tools.runQuery('<AML><Item type="Part" action="get"/></AML>')
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/boom from server/)
+  })
+
+  it('aras_run_odata returns the JSON payload', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    const r = await tools.runOData('Part?$top=1')
+    expect(r.isError).toBeFalsy()
+    expect(fake.odataCalls).toEqual(['Part?$top=1'])
+    expect(r.text).toMatch(/P-1/)
+  })
+})
+
+describe('schema discovery', () => {
+  it('aras_list_itemtypes returns the names', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () =>
+      result([{ properties: { name: 'Part' } }, { properties: { name: 'Document' } }])
+    const r = await tools.listItemTypes()
+    expect(JSON.parse(r.text)).toEqual({ count: 2, itemTypes: ['Part', 'Document'] })
+  })
+
+  it('aras_introspect_itemtype reports not-found cleanly', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([]) // ItemType lookup returns nothing
+    const r = await tools.introspectItemType('Ghost')
+    expect(r.isError).toBeFalsy()
+    expect(r.text).toMatch(/No ItemType named "Ghost"/)
+  })
+
+  it('aras_introspect_itemtype returns type + properties when found', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async (aml) => {
+      // Order matters: the Property/RelationshipType queries nest an <Item type="ItemType">
+      // for source_id, so match the outer type first.
+      if (aml.includes('type="Property"'))
+        return result([{ type: 'Property', properties: { name: 'item_number', data_type: 'string' } }])
+      if (aml.includes('type="RelationshipType"')) return result([])
+      return result([{ type: 'ItemType', properties: { name: 'Part', label: 'Part' } }])
+    }
+    const r = await tools.introspectItemType('Part')
+    const parsed = JSON.parse(r.text)
+    const names = parsed.items.map((i: { properties: { name: string } }) => i.properties.name)
+    expect(names).toContain('item_number')
+  })
+
+  it('aras_get_method reports not-found and returns source when present', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([])
+    expect((await tools.getMethod('Nope')).text).toMatch(/No Method named "Nope"/)
+
+    fake.amlHandler = async () =>
+      result([{ type: 'Method', properties: { name: 'M', method_code: 'return 1;' } }])
+    const r = await tools.getMethod('M')
+    expect(r.text).toMatch(/return 1;/)
+  })
+})
+
+describe('status', () => {
+  it('reports disconnected before connect', async () => {
+    const { tools } = setup()
+    expect(JSON.parse((await tools.status()).text)).toEqual({ connected: false })
+  })
+
+  it('reports latency when connected', async () => {
+    const { tools } = setup()
+    await connect(tools)
+    const parsed = JSON.parse((await tools.status()).text)
+    expect(parsed).toMatchObject({ connected: true, latencyMs: 7 })
+  })
+})
+
+describe('listProfiles', () => {
+  it('lists configured profiles without secrets', async () => {
+    const fake = new FakeClient()
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, {
+      loadProfiles: () => ({ dev: { url: 'http://x', database: 'D', username: 'u' } }),
+      env: {}
+    })
+    const parsed = JSON.parse(tools.listProfiles().text)
+    expect(parsed.count).toBe(1)
+    expect(parsed.profiles[0]).toEqual({ name: 'dev', url: 'http://x', database: 'D' })
+  })
+})
