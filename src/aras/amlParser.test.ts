@@ -59,6 +59,58 @@ describe('parseAmlResponse — item-reference properties', () => {
   })
 })
 
+describe('parseAmlResponse — relationships', () => {
+  it('returns relationship rows structurally with their expanded related item', () => {
+    const xml = soap(
+      '<Result><Item type="Part" id="P1"><item_number>MCP-1</item_number>' +
+        '<Relationships>' +
+        '<Item type="Part BOM" id="R1"><quantity>4</quantity>' +
+        '<related_id keyed_name="MCP-2" type="Part">' +
+        '<Item type="Part" id="P2"><item_number>MCP-2</item_number><name>Child</name></Item>' +
+        '</related_id></Item>' +
+        '</Relationships></Item></Result>'
+    )
+    const { items } = parseAmlResponse(xml)
+    // Parent is the only top-level item — relationship/related items are NOT hoisted.
+    expect(items).toHaveLength(1)
+    const parent = items[0]
+    expect(parent.properties.item_number).toBe('MCP-1')
+
+    expect(parent.relationships).toHaveLength(1)
+    const bom = parent.relationships![0]
+    expect(bom.type).toBe('Part BOM')
+    expect(bom.properties.quantity).toBe('4')
+    // related_id keeps the id for back-compat...
+    expect(bom.properties.related_id).toBe('P2')
+    expect(bom.properties['related_id@keyed_name']).toBe('MCP-2')
+    // ...and the expanded target is returned in full.
+    expect(bom.relatedItems?.related_id?.type).toBe('Part')
+    expect(bom.relatedItems?.related_id?.properties).toMatchObject({
+      item_number: 'MCP-2',
+      name: 'Child'
+    })
+  })
+
+  it('handles multiple relationship rows', () => {
+    const row = (id: string, qty: string) =>
+      `<Item type="Part BOM" id="${id}"><quantity>${qty}</quantity></Item>`
+    const xml = soap(
+      `<Result><Item type="Part" id="P1"><Relationships>${row('R1', '1')}${row('R2', '2')}</Relationships></Item></Result>`
+    )
+    const { items } = parseAmlResponse(xml)
+    expect(items).toHaveLength(1)
+    expect(items[0].relationships).toHaveLength(2)
+    expect(items[0].relationships!.map((r) => r.properties.quantity)).toEqual(['1', '2'])
+  })
+
+  it('omits relationships/relatedItems when the response has none', () => {
+    const xml = soap('<Result><Item type="Part" id="P1"><name>x</name></Item></Result>')
+    const { items } = parseAmlResponse(xml)
+    expect(items[0].relationships).toBeUndefined()
+    expect(items[0].relatedItems).toBeUndefined()
+  })
+})
+
 describe('parseAmlResponse — paging', () => {
   it('extracts page/pageMax/itemMax from a paged response', () => {
     const item = (id: string) =>

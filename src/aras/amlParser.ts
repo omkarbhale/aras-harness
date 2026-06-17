@@ -85,22 +85,64 @@ function resolveItemValue(value: XmlNode): { id: string; keyedName?: string } {
   return { id: '' }
 }
 
+/** The expanded `<Item>` nested inside an item-valued property, if the server inlined one. */
+function nestedItemOf(value: XmlNode): XmlNode | undefined {
+  const nested = value['Item']
+  if (nested === undefined) return undefined
+  return (Array.isArray(nested) ? nested[0] : nested) as XmlNode | undefined
+}
+
+/** Parse the `<Item>` rows inside a `<Relationships>` block (handles 0, 1, or many). */
+function collectRelationshipItems(rel: unknown): AmlItem[] {
+  const out: AmlItem[] = []
+  for (const wrapper of asArray(rel as XmlNode | XmlNode[])) {
+    if (wrapper === null || typeof wrapper !== 'object') continue
+    for (const item of asArray((wrapper as XmlNode)['Item'] as XmlNode | XmlNode[])) {
+      if (item && typeof item === 'object') out.push(toItem(item as XmlNode))
+    }
+  }
+  return out
+}
+
 function toItem(node: XmlNode): AmlItem {
   const id = String(node['@_id'] ?? '')
   const type = String(node['@_type'] ?? '')
   const properties: Record<string, string> = {}
+  let relationships: AmlItem[] | undefined
+  let relatedItems: Record<string, AmlItem> | undefined
+
   for (const key of Object.keys(node)) {
     if (key.startsWith('@_') || key === '#text') continue
+    const localName = key.includes(':') ? key.split(':')[1] : key
+
+    // <Relationships> wraps the relationship rows. Parse them structurally instead of
+    // collapsing the whole block to a single id (the old behavior dropped every row but
+    // one and discarded the nested <Related> target entirely).
+    if (localName === 'Relationships') {
+      const rels = collectRelationshipItems(node[key])
+      if (rels.length > 0) relationships = (relationships ?? []).concat(rels)
+      continue
+    }
+
     const value = node[key]
     if (value === null || value === undefined) {
       properties[key] = ''
     } else if (typeof value === 'object' && !Array.isArray(value)) {
-      const { id: refId, keyedName } = resolveItemValue(value as XmlNode)
+      const v = value as XmlNode
+      const { id: refId, keyedName } = resolveItemValue(v)
       properties[key] = refId
       // Carry the human-readable label alongside the id when Aras provides one and it
       // adds information (the id itself is opaque GUID).
       if (keyedName !== undefined && keyedName !== '' && keyedName !== refId) {
         properties[`${key}@keyed_name`] = keyedName
+      }
+      // When the server expanded the referenced Item inline (e.g. related_id on a BOM
+      // row), surface the full nested item too — keep the id in properties for callers
+      // that only need the ref, and return the structure for callers that want it.
+      const nested = nestedItemOf(v)
+      if (nested) {
+        relatedItems = relatedItems ?? {}
+        relatedItems[key] = toItem(nested)
       }
     } else if (Array.isArray(value)) {
       properties[key] = `[${value.length} items]`
@@ -108,7 +150,11 @@ function toItem(node: XmlNode): AmlItem {
       properties[key] = String(value)
     }
   }
-  return { id, type, properties }
+
+  const item: AmlItem = { id, type, properties }
+  if (relationships) item.relationships = relationships
+  if (relatedItems) item.relatedItems = relatedItems
+  return item
 }
 
 /**

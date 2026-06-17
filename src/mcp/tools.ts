@@ -254,8 +254,8 @@ export class ArasTools {
       )
       if (typeItems.length === 0) return ok(`No ItemType named "${name}" was found.`)
 
-      // Properties sourced by this ItemType (queried directly, not nested — the parser
-      // collapses nested relationship Items to a placeholder).
+      // Properties sourced by this ItemType, queried directly as a flat list (simpler to
+      // consume here than walking a nested response).
       const { items: props } = await this.readAml(
         `<AML><Item type="Property" action="get" select="name,label,data_type,data_source">` +
           `<source_id><Item type="ItemType" action="get" select="id"><name>${name}</name></Item></source_id>` +
