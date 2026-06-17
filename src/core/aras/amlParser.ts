@@ -94,6 +94,13 @@ export function parseAmlResponse(xml: string): AmlResult {
       ((fault['detail'] as XmlNode | undefined)?.['message'] as string | undefined) ??
       'Aras server fault'
     const faultCode = fault['faultcode'] as string | undefined
+    // Aras reports "query matched nothing" as a fault: faultcode 0 + "No items of type X found".
+    // That's a normal empty result, NOT an error — surface it as zero items so callers don't
+    // mistake it for a failure (and retry it to death). Match the faultstring specifically:
+    // faultcode 0 alone is reused for other soft faults (e.g. "No permission to access this item").
+    if (/^No items of type .+ found/i.test(String(faultString).trim())) {
+      return { raw: xml, items: [], count: 0 }
+    }
     throw new ArasFaultError(String(faultString), faultCode ? String(faultCode) : undefined)
   }
 

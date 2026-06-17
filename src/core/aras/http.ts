@@ -46,6 +46,25 @@ export interface RetryOptions {
   baseDelayMs?: number
   /** Maximum backoff per attempt. Defaults to 16 s. */
   maxDelayMs?: number
+  /** Decide whether an error is worth retrying. Defaults to {@link isRetryableError}. */
+  shouldRetry?: (err: unknown) => boolean
+}
+
+/**
+ * Whether an error has any chance of succeeding on retry. AML faults (bad query,
+ * unknown type, malformed XML) and 4xx client errors are deterministic — retrying
+ * them only burns the tool timeout and hides the real message from the agent. We
+ * retry transient failures: network errors, 5xx, and timeouts.
+ */
+export function isRetryableError(err: unknown): boolean {
+  // Imported lazily to avoid a hard import cycle (errors.ts has no deps, but keep this self-contained).
+  const name = (err as { name?: string } | null)?.name
+  if (name === 'ArasFaultError' || name === 'ArasAuthError') return false
+  const status = (err as { status?: number } | null)?.status
+  if (name === 'ArasRequestError' && typeof status === 'number') {
+    return status >= 500 // 5xx may be transient; 4xx will not fix itself.
+  }
+  return true // network errors, unknown errors → retry.
 }
 
 /**
@@ -61,6 +80,7 @@ export async function withRetry<T>(
   const max = options.maxAttempts && options.maxAttempts > 0 ? options.maxAttempts : Infinity
   const base = options.baseDelayMs ?? 2000
   const cap = options.maxDelayMs ?? 16000
+  const shouldRetry = options.shouldRetry ?? isRetryableError
   let attempt = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -69,6 +89,9 @@ export async function withRetry<T>(
     } catch (err) {
       attempt++
       if (signal?.aborted) throw err
+      // Deterministic failures (faults, 4xx, malformed AML) can't be fixed by waiting —
+      // throw immediately so the real error reaches the agent instead of a timeout.
+      if (!shouldRetry(err)) throw err
       if (attempt >= max) throw err
       const exp = Math.min(cap, base * Math.pow(2, attempt - 1))
       const jitter = exp * (0.5 + Math.random() * 0.5) // 50%–100% of exp

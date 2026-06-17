@@ -38,6 +38,13 @@ const AML_FAULT =
   '<faultcode>0</faultcode><faultstring>No permission to access this item</faultstring>' +
   '</SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>'
 
+// Aras reports an empty `get` as a fault (faultcode 0 + "No items of type X found").
+const AML_NO_ITEMS =
+  '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">' +
+  '<SOAP-ENV:Body><SOAP-ENV:Fault>' +
+  '<faultcode>0</faultcode><faultstring>No items of type Part found.</faultstring>' +
+  '</SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>'
+
 /** Programmable mock HTTP client that records requests and returns scripted responses. */
 class MockHttp implements HttpClient {
   readonly requests: HttpRequest[] = []
@@ -143,6 +150,15 @@ describe('ArasClient AML results', () => {
       message: 'No permission to access this item'
     })
     await expect(client.runAml('<AML/>')).rejects.toBeInstanceOf(ArasFaultError)
+  })
+
+  it('normalizes the "No items found" fault to an empty result instead of throwing', async () => {
+    const http = new MockHttp((req) =>
+      req.url.includes('InnovatorServer.aspx') ? ok(AML_NO_ITEMS) : route(req)
+    )
+    const client = new ArasClient(creds, { http })
+    const result = await client.runAml('<AML/>')
+    expect(result).toMatchObject({ count: 0, items: [] })
   })
 
   it('invalidates the token and throws on a 401', async () => {
