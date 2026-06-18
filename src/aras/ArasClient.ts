@@ -171,7 +171,10 @@ export class ArasClient {
       url,
       headers: {
         Authorization: `Bearer ${token}`,
-        SOAPAction: 'ApplyItem',
+        // ApplyAML, not ApplyItem: ApplyItem commits only the first <Item> in the body and
+        // silently drops siblings, so a multi-item AML doc created just one row. ApplyAML
+        // processes the whole document (1..N items).
+        SOAPAction: 'ApplyAML',
         'Content-Type': 'text/xml; charset=utf-8',
         DATABASE: this.creds.database
       },

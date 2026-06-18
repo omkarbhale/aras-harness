@@ -111,7 +111,7 @@ describe('ArasClient auth', () => {
     await client.runAml('<AML/>')
     const amlReq = http.requests.find((r) => r.url.includes('InnovatorServer.aspx'))
     expect(amlReq?.headers?.Authorization).toBe('Bearer tok-1')
-    expect(amlReq?.headers?.SOAPAction).toBe('ApplyItem')
+    expect(amlReq?.headers?.SOAPAction).toBe('ApplyAML')
   })
 
   it('throws ArasAuthError when the token endpoint rejects credentials', async () => {
