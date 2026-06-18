@@ -124,6 +124,13 @@ npx vitest run src/mcp/live.test.ts
 An optional add→delete round-trip runs only with `ARAS_TEST_ALLOW_WRITE=1`,
 `ARAS_TEST_WRITE_TYPE`, and `ARAS_TEST_WRITE_KEY` set (use a scratch DB).
 
+The package **export driver** has its own live test (`src/mcp/packaging.live.test.ts`)
+that actually spawns the bundled PowerShell scripts against the .NET DLLs — it runs only
+on Windows with the same `ARAS_TEST_*` creds, discovers a packaged ItemType, exports it,
+and asserts real XML is written (guarding the "engine reports success but exports nothing"
+regression that unit tests, which mock the runner, can't catch). Export is read-only on
+the server, so it's safe against any instance.
+
 ## Layout
 
 ```
