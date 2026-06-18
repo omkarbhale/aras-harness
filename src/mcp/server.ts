@@ -64,8 +64,9 @@ export function createServer(tools: ArasTools): McpServer {
       description:
         'Identify the user this session is authenticated as: returns the connected login, its Aras ' +
         'User `id`, display name, and email, plus the active connection name and database. The `id` is ' +
-        'what `created_by_id` / `owned_by_id` / `managed_by_id` filters match on — call this once instead ' +
-        'of looking up your own User item before "created by me" queries.',
+        'what `created_by_id` / `modified_by_id` filters match on — call this once instead ' +
+        'of looking up your own User item. Some properties may refer to Identity ' +
+        'instead of User.',
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
