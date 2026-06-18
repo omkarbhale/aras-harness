@@ -103,6 +103,24 @@ export interface PackagingDeps {
   makeTempDir?: () => string
   /** Cap on bytes of the engine log echoed back to the agent. */
   maxLogChars?: number
+  /** Host platform; defaults to process.platform. Overridable so tests are deterministic. */
+  platform?: NodeJS.Platform
+}
+
+/**
+ * Import/export drive the Aras .NET Framework package utilities through Windows
+ * PowerShell — there is no equivalent on other platforms. Return a clear, agent-facing
+ * refusal rather than letting `spawn('powershell.exe')` fail with a cryptic ENOENT.
+ */
+function windowsOnlyGuard(op: string, platform: NodeJS.Platform): PackagingOutcome | null {
+  if (platform === 'win32') return null
+  return {
+    ok: false,
+    text:
+      `${op} is Windows-only: it runs the Aras .NET Framework package import/export ` +
+      `utilities via Windows PowerShell, which is not available on this platform (${platform}). ` +
+      'Run the MCP server on Windows to use this tool.'
+  }
 }
 
 /** Shape returned to the tool layer; `text` is what the agent sees. */
@@ -127,6 +145,9 @@ export async function runImport(
   manifestPath: string,
   deps: PackagingDeps = {}
 ): Promise<PackagingOutcome> {
+  const guard = windowsOnlyGuard('aras_import', deps.platform ?? process.platform)
+  if (guard) return guard
+
   const res = deps.resources ?? resolveResources()
   const runner = deps.runner ?? defaultScriptRunner
   const maxLog = deps.maxLogChars ?? DEFAULT_MAX_LOG
@@ -187,6 +208,9 @@ export async function runExport(
   groups: PackageGroups,
   deps: PackagingDeps = {}
 ): Promise<PackagingOutcome> {
+  const guard = windowsOnlyGuard('aras_export', deps.platform ?? process.platform)
+  if (guard) return guard
+
   const res = deps.resources ?? resolveResources()
   const runner = deps.runner ?? defaultScriptRunner
   const maxLog = deps.maxLogChars ?? DEFAULT_MAX_LOG

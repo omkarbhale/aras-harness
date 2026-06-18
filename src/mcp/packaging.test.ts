@@ -64,7 +64,7 @@ describe('findPackageRoot / resolveResources', () => {
 describe('runImport', () => {
   it('asserts the manifest exists', async () => {
     const { runner } = fakeRunner()
-    const r = await runImport(CREDS, join(tmp, 'missing.mf'), { runner })
+    const r = await runImport(CREDS, join(tmp, 'missing.mf'), { runner, platform: 'win32' })
     expect(r.ok).toBe(false)
     expect(r.text).toMatch(/manifest file not found/)
   })
@@ -73,7 +73,7 @@ describe('runImport', () => {
     const manifest = join(tmp, 'imports.mf')
     writeFileSync(manifest, '<imports><package name="X" path="X\\Import"/></imports>')
     const { runner, calls } = fakeRunner({ ok: true })
-    const r = await runImport(CREDS, manifest, { runner, makeTempDir: () => tmp })
+    const r = await runImport(CREDS, manifest, { runner, platform: 'win32', makeTempDir: () => tmp })
 
     expect(r.ok).toBe(true)
     expect(r.text).toMatch(/Import succeeded/)
@@ -90,7 +90,7 @@ describe('runImport', () => {
     const manifest = join(tmp, 'imports.mf')
     writeFileSync(manifest, '<imports/>')
     const { runner } = fakeRunner({ ok: false })
-    const r = await runImport(CREDS, manifest, { runner, makeTempDir: () => tmp })
+    const r = await runImport(CREDS, manifest, { runner, platform: 'win32', makeTempDir: () => tmp })
     expect(r.ok).toBe(false)
     expect(r.text).toMatch(/Import FAILED/)
   })
@@ -102,7 +102,7 @@ describe('runExport', () => {
 
   it('asserts a missing folder', async () => {
     const { runner } = fakeRunner()
-    const r = await runExport(CREDS, join(tmp, 'nope'), groups, { runner })
+    const r = await runExport(CREDS, join(tmp, 'nope'), groups, { runner, platform: 'win32' })
     expect(r.ok).toBe(false)
     expect(r.text).toMatch(/output folder does not exist/)
   })
@@ -112,7 +112,7 @@ describe('runExport', () => {
     mkdirSync(out)
     writeFileSync(join(out, 'stray.txt'), 'x')
     const { runner } = fakeRunner()
-    const r = await runExport(CREDS, out, groups, { runner })
+    const r = await runExport(CREDS, out, groups, { runner, platform: 'win32' })
     expect(r.ok).toBe(false)
     expect(r.text).toMatch(/not empty/)
   })
@@ -121,7 +121,7 @@ describe('runExport', () => {
     const out = join(tmp, 'out')
     mkdirSync(out)
     const { runner } = fakeRunner()
-    const r = await runExport(CREDS, out, {}, { runner })
+    const r = await runExport(CREDS, out, {}, { runner, platform: 'win32' })
     expect(r.ok).toBe(false)
     expect(r.text).toMatch(/no items/i)
   })
@@ -132,7 +132,7 @@ describe('runExport', () => {
     const logDir = join(tmp, 'logs')
     mkdirSync(logDir)
     const { runner, calls } = fakeRunner({ ok: true })
-    const r = await runExport(CREDS, out, groups, { runner, makeTempDir: () => logDir })
+    const r = await runExport(CREDS, out, groups, { runner, platform: 'win32', makeTempDir: () => logDir })
 
     expect(r.ok).toBe(true)
     expect(r.text).toMatch(/Export succeeded/)
@@ -140,5 +140,27 @@ describe('runExport', () => {
     const jsonIdx = call.args.indexOf('-GroupsJson')
     expect(JSON.parse(call.args[jsonIdx + 1])).toEqual(groups)
     expect(call.env.ARAS_PKG_PASSWORD).toBe('secret')
+  })
+})
+
+describe('windows-only guard', () => {
+  it('refuses import on a non-Windows platform without spawning', async () => {
+    const { runner, calls } = fakeRunner()
+    const manifest = join(tmp, 'imports.mf')
+    writeFileSync(manifest, '<imports/>')
+    const r = await runImport(CREDS, manifest, { runner, platform: 'linux' })
+    expect(r.ok).toBe(false)
+    expect(r.text).toMatch(/Windows-only/)
+    expect(calls.length).toBe(0)
+  })
+
+  it('refuses export on a non-Windows platform without spawning', async () => {
+    const { runner, calls } = fakeRunner()
+    const out = join(tmp, 'out')
+    mkdirSync(out)
+    const r = await runExport(CREDS, out, { 'com.acme': [{ itemType: 'Part', itemId: 'A', keyedName: 'P' }] }, { runner, platform: 'darwin' })
+    expect(r.ok).toBe(false)
+    expect(r.text).toMatch(/Windows-only/)
+    expect(calls.length).toBe(0)
   })
 })
