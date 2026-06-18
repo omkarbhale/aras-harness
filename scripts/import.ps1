@@ -3,21 +3,22 @@
     Import an Aras solution manifest (.mf) into a live Aras Innovator (v12+) instance.
 
 .DESCRIPTION
-    Driven by the aras-mcp `aras_import` tool. Loads IOM.dll + Libs.dll (the
-    Aras.Tools.SolutionUpgrade package import/export library), authenticates with the
-    OAuth password grant, and runs ImportExportManager.ImportSolutions over every
-    package listed in the manifest.
+    Driven by the aras-mcp `aras_import` tool. Loads IOM.dll + Libs.dll and runs
+    ImportExportManager.ImportSolutions over every package listed in the manifest.
 
-    All progress/status/error lines from the import engine are written to stdout
-    (prefixed) so the calling tool can relay them to the agent; the engine's own log
-    is written to -LogFile.
+    The engine calls happen inside a compiled C# helper (PowerShell hands it only
+    primitive strings). This mirrors the export driver and avoids the PowerShell-host
+    "cast PSObject to Hashtable" failure mode the SolutionUpgrade engine exhibits when
+    driven directly from PowerShell. Do NOT inline this back into pure PowerShell.
+
+    Import is a MERGE import (bMerge=true) and THOROUGH (bFast=false) with vault data
+    (bVault=true) — the safe defaults; -FastMode / -MergeMode can override for manual runs.
 
     Contract with the caller:
       - Prints "ARAS_IMPORT_OK" on success, "ARAS_IMPORT_FAIL: <reason>" on failure.
       - Exit code 0 on success, non-zero on failure.
 
-    This is Windows PowerShell 5.1 / .NET Framework only: the Aras libraries are
-    .NET Framework assemblies.
+    Windows PowerShell 5.1 / .NET Framework only.
 #>
 [CmdletBinding()]
 param(
@@ -49,88 +50,103 @@ try {
     if (-not (Test-Path $IomDll))       { Fail "IOM.dll not found: $IomDll" }
     if (-not (Test-Path $LibsDll))      { Fail "Libs.dll not found: $LibsDll" }
 
-    Add-Type -Path $IomDll
-    Add-Type -Path $LibsDll
+    $iom  = (Resolve-Path $IomDll).Path
+    $libs = (Resolve-Path $LibsDll).Path
+    $manifest = (Resolve-Path $ManifestFile).Path
+    Add-Type -Path $iom
+    Add-Type -Path $libs
 
-    # --- OAuth password-grant connection (mirrors Aras IOMApp client) ---
-    $tokenEndpoint = $ArasUrl.TrimEnd('/') + "/OAuthServer/connect/token"
-    $tokenOptions = New-Object Aras.IOM.OAuth.PasswordTokenProviderOptions
-    $tokenOptions.ClientId      = "IOMApp"
-    $tokenOptions.Scope         = "Innovator"
-    $tokenOptions.Database      = $ArasDatabase
-    $tokenOptions.UserName      = $ArasUser
-    $tokenOptions.Password      = $ArasPassword
-    $tokenOptions.TokenEndpoint = $tokenEndpoint
-
-    $tokenProvider    = New-Object Aras.IOM.OAuth.PasswordTokenProvider($tokenOptions)
-    $serverConnection = [Aras.IOM.IomFactory]::CreateHttpServerConnection($ArasUrl, $tokenProvider, [Aras.IOM.OAuth.ProtocolType]::Standard)
-
-    $inn = New-Object Aras.IOM.Innovator($serverConnection)
-    $test = $inn.applyAML("<AML></AML>")
-    if ($test.isError()) { Fail "Aras connection/auth failed: $($test.getErrorDetail())" }
-    Write-Output "INFO: connected to $ArasUrl (db=$ArasDatabase) as $ArasUser"
-
-    # --- Import context ---
-    $manifestInfo = New-Object System.IO.FileInfo($ManifestFile)
-    $context = New-Object Aras.Tools.SolutionUpgrade.SolutionUpgradeContext
-    $context.Action           = [Aras.Tools.SolutionUpgrade.ImportExport]::Import
-    $context.Verbose          = $true
-    $context.Url              = $ArasUrl
-    $context.DataBase         = $ArasDatabase
-    $context.UserName         = $ArasUser
-    $context.Password         = $ArasPassword
-    $context.WorkingDirectory = $manifestInfo.DirectoryName
-    $context.ManifestFile     = $manifestInfo.FullName
-    $context.LogFilePath      = $LogFile
-    $context.Timeout          = $Timeout
-
-    $importContext = New-Object Aras.Tools.SolutionUpgrade.SUImportContext
-    $importContext.bFast  = $FastMode
-    $importContext.bMerge = $MergeMode
-    $importContext.bVault = $true
-
-    $cItemHelper = New-Object Aras.Tools.SolutionUpgrade.CItemHelper($serverConnection)
-    $cItemHelper.Login()
-
-    # Message factory: relay every engine message to stdout so the tool can surface it.
-    $msgFactoryCode = @"
+    $code = @"
 using System;
+using System.Collections;
+using System.IO;
+using System.Xml;
+using Aras.IOM;
+using Aras.IOM.OAuth;
 using Aras.Tools.SolutionUpgrade;
 
-public class ConsoleMessage : Message {
+public class ImpMessage : Message {
     private readonly string _prefix;
-    public ConsoleMessage(string prefix) { _prefix = prefix; }
+    private readonly ImpResult _r;
+    public ImpMessage(string prefix, ImpResult r) { _prefix = prefix; _r = r; }
     public override bool? Execute() {
-        if (!string.IsNullOrEmpty(Text))
+        if (!string.IsNullOrEmpty(Text)) {
             Console.WriteLine("  [{0}] {1}", _prefix, Text);
+            if (_prefix == "ERROR" || _prefix == "ERROR?") _r.Errors++;
+        }
         return true;
     }
 }
 
-public class ConsoleMessagesFactory : IMessagesFactory {
-    public Message GetErrorMessage()          { return new ConsoleMessage("ERROR"); }
-    public Message GetErrorMessageQuestion()  { return new ConsoleMessage("ERROR?"); }
-    public Message GetWarningMessage()        { return new ConsoleMessage("WARN"); }
-    public Message GetStatusMessage()         { return new ConsoleMessage("INFO"); }
-    public Message GetCurrentPackageMessage() { return new ConsoleMessage("PKG"); }
+public class ImpResult { public int Errors = 0; }
+
+public class ImpMessagesFactory : IMessagesFactory {
+    private readonly ImpResult _r;
+    public ImpMessagesFactory(ImpResult r) { _r = r; }
+    public Message GetErrorMessage()          { return new ImpMessage("ERROR",  _r); }
+    public Message GetErrorMessageQuestion()  { return new ImpMessage("ERROR?", _r); }
+    public Message GetWarningMessage()        { return new ImpMessage("WARN",   _r); }
+    public Message GetStatusMessage()         { return new ImpMessage("INFO",   _r); }
+    public Message GetCurrentPackageMessage() { return new ImpMessage("PKG",    _r); }
+}
+
+public static class ArasImportRunner {
+    // Returns error-message count; throws on a non-zero engine return code.
+    public static int Run(
+        string url, string db, string user, string pw,
+        string manifestFile, string logFile, int timeout, bool fast, bool merge) {
+
+        var opts = new PasswordTokenProviderOptions {
+            ClientId = "IOMApp", Scope = "Innovator", Database = db,
+            UserName = user, Password = pw,
+            TokenEndpoint = url.TrimEnd('/') + "/OAuthServer/connect/token"
+        };
+        var sc = IomFactory.CreateHttpServerConnection(url, new PasswordTokenProvider(opts), Aras.IOM.OAuth.ProtocolType.Standard);
+        var inn = new Innovator(sc);
+        var test = inn.applyAML("<AML></AML>");
+        if (test.isError()) throw new Exception("Aras connection/auth failed: " + test.getErrorDetail());
+        Console.WriteLine("INFO: connected to " + url + " (db=" + db + ") as " + user);
+
+        var manifestInfo = new FileInfo(manifestFile);
+        var ctx = new SolutionUpgradeContext {
+            Action = ImportExport.Import, Verbose = true, Url = url,
+            DataBase = db, UserName = user, Password = pw,
+            WorkingDirectory = manifestInfo.DirectoryName, ManifestFile = manifestInfo.FullName,
+            LogFilePath = logFile, Timeout = timeout
+        };
+        var importContext = new SUImportContext { bFast = fast, bMerge = merge, bVault = true };
+
+        var packages = new ArrayList();
+        var doc = new XmlDocument();
+        doc.Load(manifestFile);
+        var root = doc.DocumentElement; // <imports>
+        foreach (XmlNode node in root.ChildNodes) {
+            if (node.NodeType != XmlNodeType.Element) continue;
+            if (!string.Equals(node.Name, "package", StringComparison.OrdinalIgnoreCase)) continue;
+            var nameAttr = node.Attributes["name"];
+            if (nameAttr != null && !string.IsNullOrEmpty(nameAttr.Value)) packages.Add(nameAttr.Value);
+        }
+        if (packages.Count == 0) throw new Exception("Manifest lists no <package> entries: " + manifestFile);
+        Console.WriteLine("INFO: importing packages: " + string.Join(", ", (string[])packages.ToArray(typeof(string))));
+
+        var r = new ImpResult();
+        var mf = new ImpMessagesFactory(r);
+        var ci = new CItemHelper(sc);
+        ci.Login();
+        var mgr = new ImportExportManager(ctx, mf, ci);
+        int returnCode = mgr.ImportSolutions(packages, importContext);
+        if (returnCode != 0) throw new Exception("ImportSolutions returned " + returnCode + " (see log: " + logFile + ")");
+        return r.Errors;
+    }
 }
 "@
-    Add-Type -TypeDefinition $msgFactoryCode -ReferencedAssemblies @($LibsDll)
-    $messagesFactory = New-Object ConsoleMessagesFactory
+    Add-Type -TypeDefinition $code -ReferencedAssemblies @($iom, $libs, 'System.Xml.dll')
 
-    $importExportManager = New-Object Aras.Tools.SolutionUpgrade.ImportExportManager($context, $messagesFactory, $cItemHelper)
+    $errors = [ArasImportRunner]::Run(
+        $ArasUrl, $ArasDatabase, $ArasUser, $ArasPassword,
+        $manifest, $LogFile, $Timeout, $FastMode, $MergeMode)
 
-    # Packages to import = every <package name="..."> in the manifest.
-    [xml]$manifestXml = Get-Content $ManifestFile -Raw
-    $packagesToImport = New-Object System.Collections.ArrayList
-    foreach ($pkg in $manifestXml.imports.package) {
-        [void]$packagesToImport.Add($pkg.name)
-    }
-    if ($packagesToImport.Count -eq 0) { Fail "Manifest lists no <package> entries: $ManifestFile" }
-    Write-Output "INFO: importing packages: $($packagesToImport -join ', ')"
-
-    $returnCode = $importExportManager.ImportSolutions($packagesToImport, $importContext)
-    if ($returnCode -ne 0) { Fail "ImportSolutions returned $returnCode (see log: $LogFile)" }
+    if ($errors -gt 0) { Fail "ImportSolutions reported $errors error(s) (see log: $LogFile)" }
 
     Write-Output "ARAS_IMPORT_OK"
     exit 0

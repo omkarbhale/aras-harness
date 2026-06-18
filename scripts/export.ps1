@@ -4,20 +4,23 @@
     grouped by the package each item belongs to, producing a re-importable manifest.
 
 .DESCRIPTION
-    Driven by the aras-mcp `aras_export` tool. Loads IOM.dll + Libs.dll, authenticates
-    with the OAuth password grant, and runs ImportExportManager.ExportSolutions over the
-    "selected items" table.
+    Driven by the aras-mcp `aras_export` tool. Loads IOM.dll + Libs.dll and runs the
+    SolutionUpgrade ImportExportManager.ExportSolutions over the "selected items" table.
 
-    The caller has already resolved which package each item belongs to (orphans — items
-    in no package — are rejected by the tool before this script runs). -GroupsJson is a
-    JSON object mapping packageName -> array of { itemType, itemId, keyedName }:
+    IMPORTANT — why the work happens in C#:
+      When ExportSolutions is invoked directly from PowerShell, the engine throws
+      "Unable to cast object of type 'System.Management.Automation.PSObject' to type
+      'System.Collections.Hashtable'" (PowerShell's ETS wraps an object the engine
+      re-casts internally) and silently exports nothing. Building the table and calling
+      the engine entirely inside a compiled C# helper avoids this — PowerShell only ever
+      hands the helper primitive strings/arrays. Do NOT "simplify" this back into pure PS.
 
-        { "com.acme.parts": [ { "itemType": "Part", "itemId": "...", "keyedName": "P-1" } ],
-          "com.acme.cad":   [ ... ] }
-
-    One export call therefore spans every package its items live in. After export an
-    `imports.mf` is written at the root of -OutDir enumerating ALL of those packages, so
-    the result can be fed straight back to `aras_import`.
+    The caller has already resolved which package each item belongs to (orphans are
+    rejected by the tool before this script runs). -GroupsJson is a JSON object mapping
+    packageName -> array of { itemType, itemId, keyedName }. One export call spans every
+    package its items live in; the SolutionUpgrade engine itself writes an `imports.mf`
+    at the root of -OutDir enumerating those packages (with their dependencies), so the
+    result feeds straight back into `aras_import`.
 
     Contract with the caller:
       - -OutDir MUST already exist and be empty (the tool enforces this before calling).
@@ -57,132 +60,127 @@ try {
     if (-not (Test-Path $IomDll))  { Fail "IOM.dll not found: $IomDll" }
     if (-not (Test-Path $LibsDll)) { Fail "Libs.dll not found: $LibsDll" }
 
+    $iom  = (Resolve-Path $IomDll).Path
+    $libs = (Resolve-Path $LibsDll).Path
+    Add-Type -Path $iom
+    Add-Type -Path $libs
+
+    # Flatten the grouped JSON into parallel primitive string arrays in PowerShell, then
+    # hand them to the compiled helper. (Only strings cross the boundary — see note above.)
     $groups = $GroupsJson | ConvertFrom-Json
     if ($null -eq $groups) { Fail "GroupsJson did not parse" }
-    $packageNames = @($groups.PSObject.Properties.Name)
-    if ($packageNames.Count -eq 0) { Fail "No packages/items requested for export" }
-
-    Add-Type -Path $IomDll
-    Add-Type -Path $LibsDll
-
-    # --- OAuth password-grant connection ---
-    $tokenEndpoint = $ArasUrl.TrimEnd('/') + "/OAuthServer/connect/token"
-    $tokenOptions = New-Object Aras.IOM.OAuth.PasswordTokenProviderOptions
-    $tokenOptions.ClientId      = "IOMApp"
-    $tokenOptions.Scope         = "Innovator"
-    $tokenOptions.Database      = $ArasDatabase
-    $tokenOptions.UserName      = $ArasUser
-    $tokenOptions.Password      = $ArasPassword
-    $tokenOptions.TokenEndpoint = $tokenEndpoint
-
-    $tokenProvider    = New-Object Aras.IOM.OAuth.PasswordTokenProvider($tokenOptions)
-    $serverConnection = [Aras.IOM.IomFactory]::CreateHttpServerConnection($ArasUrl, $tokenProvider, [Aras.IOM.OAuth.ProtocolType]::Standard)
-
-    $inn = New-Object Aras.IOM.Innovator($serverConnection)
-    $test = $inn.applyAML("<AML></AML>")
-    if ($test.isError()) { Fail "Aras connection/auth failed: $($test.getErrorDetail())" }
-    Write-Output "INFO: connected to $ArasUrl (db=$ArasDatabase) as $ArasUser"
-
-    # --- Build the SolutionUpgrade selected-items table ---
-    #   table[packageName] = Hashtable( itemId -> ExportItem(keyedName, itemId, itemType) )
-    $table = New-Object System.Collections.Hashtable
-    $totalItems = 0
-    foreach ($pkgName in $packageNames) {
-        $pkgItems = New-Object System.Collections.Hashtable
+    $pkgArr  = New-Object System.Collections.Generic.List[string]
+    $typeArr = New-Object System.Collections.Generic.List[string]
+    $idArr   = New-Object System.Collections.Generic.List[string]
+    $nameArr = New-Object System.Collections.Generic.List[string]
+    foreach ($pkgName in @($groups.PSObject.Properties.Name)) {
         foreach ($it in @($groups.$pkgName)) {
-            $itemType  = [string]$it.itemType
-            $itemId    = [string]$it.itemId
-            $keyedName = [string]$it.keyedName
-            if ([string]::IsNullOrWhiteSpace($itemType) -or [string]::IsNullOrWhiteSpace($itemId)) {
-                Fail "Each item needs a non-empty itemType and itemId (package '$pkgName')"
-            }
-            if ([string]::IsNullOrWhiteSpace($keyedName)) { $keyedName = $itemId }
-            $pkgItems[$itemId] = New-Object Aras.Tools.SolutionUpgrade.ExportItem($keyedName, $itemId, $itemType)
-            $totalItems++
+            $pkgArr.Add([string]$pkgName)
+            $typeArr.Add([string]$it.itemType)
+            $idArr.Add([string]$it.itemId)
+            $kn = [string]$it.keyedName
+            if ([string]::IsNullOrWhiteSpace($kn)) { $kn = [string]$it.itemId }
+            $nameArr.Add($kn)
         }
-        $table[$pkgName] = $pkgItems
     }
-    Write-Output "INFO: exporting $totalItems item(s) across $($packageNames.Count) package(s): $($packageNames -join ', ')"
+    if ($idArr.Count -eq 0) { Fail "No items requested for export" }
 
-    # The export URL the engine expects: normalize via the lib's helper if present,
-    # otherwise fall back to the raw URL (proven to work for the import path).
-    $serverPath = $ArasUrl
-    try   { $serverPath = [Aras.Tools.SolutionUpgrade.InnovatorServer]::GetInnovatorServerPath($ArasUrl) }
-    catch {
-        try { $serverPath = [Aras.IOM.InnovatorServer]::GetInnovatorServerPath($ArasUrl) }
-        catch { $serverPath = $ArasUrl }
-    }
-
-    # --- Export context ---
-    $context = New-Object Aras.Tools.SolutionUpgrade.SolutionUpgradeContext
-    $context.Action           = [Aras.Tools.SolutionUpgrade.ImportExport]::Export
-    $context.WorkingDirectory = $OutDir
-    $context.Url              = $serverPath
-    $context.DataBase         = $ArasDatabase
-    $context.UserName         = $ArasUser
-    $context.Password         = $ArasPassword
-    $context.LogFilePath      = $LogFile
-    $context.Timeout          = $Timeout
-
-    $exportContext = New-Object Aras.Tools.SolutionUpgrade.SUExportContext
-    $exportContext.sLevel                 = "1"
-    $exportContext.bExportReferencedItems = $ExportReferenced
-    $exportContext.RefToUnknownPacks      = [Aras.Tools.SolutionUpgrade.ReferencesToUnknownPackages]::DoNotRemove
-
-    # Message factory: relay engine messages to stdout.
-    $msgFactoryCode = @"
+    # --- Compiled helper: build the table + run the engine entirely in C# ---
+    $code = @"
 using System;
+using System.Collections;
+using Aras.IOM;
+using Aras.IOM.OAuth;
 using Aras.Tools.SolutionUpgrade;
 
-public class ConsoleMessage : Message {
+public class PkgMessage : Message {
     private readonly string _prefix;
-    public ConsoleMessage(string prefix) { _prefix = prefix; }
+    private readonly ExpResult _r;
+    public PkgMessage(string prefix, ExpResult r) { _prefix = prefix; _r = r; }
     public override bool? Execute() {
-        if (!string.IsNullOrEmpty(Text))
+        if (!string.IsNullOrEmpty(Text)) {
             Console.WriteLine("  [{0}] {1}", _prefix, Text);
+            if (_prefix == "ERROR" || _prefix == "ERROR?") _r.Errors++;
+        }
         return true;
     }
 }
 
-public class ConsoleMessagesFactory : IMessagesFactory {
-    public Message GetErrorMessage()          { return new ConsoleMessage("ERROR"); }
-    public Message GetErrorMessageQuestion()  { return new ConsoleMessage("ERROR?"); }
-    public Message GetWarningMessage()        { return new ConsoleMessage("WARN"); }
-    public Message GetStatusMessage()         { return new ConsoleMessage("INFO"); }
-    public Message GetCurrentPackageMessage() { return new ConsoleMessage("PKG"); }
+public class ExpResult { public int Errors = 0; }
+
+public class PkgMessagesFactory : IMessagesFactory {
+    private readonly ExpResult _r;
+    public PkgMessagesFactory(ExpResult r) { _r = r; }
+    public Message GetErrorMessage()          { return new PkgMessage("ERROR",  _r); }
+    public Message GetErrorMessageQuestion()  { return new PkgMessage("ERROR?", _r); }
+    public Message GetWarningMessage()        { return new PkgMessage("WARN",   _r); }
+    public Message GetStatusMessage()         { return new PkgMessage("INFO",   _r); }
+    public Message GetCurrentPackageMessage() { return new PkgMessage("PKG",    _r); }
+}
+
+public static class ArasExportRunner {
+    // Returns the number of error messages the engine reported (0 == clean).
+    public static int Run(
+        string url, string db, string user, string pw,
+        string outDir, string logFile, int timeout, bool exportReferenced,
+        string[] pkgNames, string[] itemTypes, string[] itemIds, string[] keyedNames) {
+
+        var opts = new PasswordTokenProviderOptions {
+            ClientId = "IOMApp", Scope = "Innovator", Database = db,
+            UserName = user, Password = pw,
+            TokenEndpoint = url.TrimEnd('/') + "/OAuthServer/connect/token"
+        };
+        var sc = IomFactory.CreateHttpServerConnection(url, new PasswordTokenProvider(opts), Aras.IOM.OAuth.ProtocolType.Standard);
+        var inn = new Innovator(sc);
+        var test = inn.applyAML("<AML></AML>");
+        if (test.isError()) throw new Exception("Aras connection/auth failed: " + test.getErrorDetail());
+        Console.WriteLine("INFO: connected to " + url + " (db=" + db + ") as " + user);
+
+        // table[packageName] = Hashtable( itemId -> ExportItem(keyedName, itemId, itemType) )
+        var table = new Hashtable();
+        for (int i = 0; i < itemIds.Length; i++) {
+            var pkg = pkgNames[i];
+            var inner = (Hashtable)table[pkg];
+            if (inner == null) { inner = new Hashtable(); table[pkg] = inner; }
+            inner[itemIds[i]] = new ExportItem(keyedNames[i], itemIds[i], itemTypes[i]);
+        }
+
+        string serverPath = url;
+        try { serverPath = InnovatorServer.GetInnovatorServerPath(url); } catch { serverPath = url; }
+
+        var ctx = new SolutionUpgradeContext {
+            Action = ImportExport.Export, WorkingDirectory = outDir, Url = serverPath,
+            DataBase = db, UserName = user, Password = pw, LogFilePath = logFile, Timeout = timeout
+        };
+        var ec = new SUExportContext {
+            sLevel = "1", bExportReferencedItems = exportReferenced,
+            RefToUnknownPacks = ReferencesToUnknownPackages.DoNotRemove
+        };
+
+        var r = new ExpResult();
+        var mf = new PkgMessagesFactory(r);
+        var ci = new CItemHelper(sc);
+        ci.Login();
+        var mgr = new ImportExportManager(ctx, mf, ci);
+        mgr.ExportSolutions(ec, table);
+        return r.Errors;
+    }
 }
 "@
-    Add-Type -TypeDefinition $msgFactoryCode -ReferencedAssemblies @($LibsDll)
-    $messagesFactory = New-Object ConsoleMessagesFactory
+    Add-Type -TypeDefinition $code -ReferencedAssemblies @($iom, $libs)
 
-    $cItemHelper = New-Object Aras.Tools.SolutionUpgrade.CItemHelper($serverConnection)
-    $cItemHelper.Login()
+    $errors = [ArasExportRunner]::Run(
+        $ArasUrl, $ArasDatabase, $ArasUser, $ArasPassword,
+        $OutDir, $LogFile, $Timeout, $ExportReferenced,
+        $pkgArr.ToArray(), $typeArr.ToArray(), $idArr.ToArray(), $nameArr.ToArray())
 
-    $importExportManager = New-Object Aras.Tools.SolutionUpgrade.ImportExportManager($context, $messagesFactory, $cItemHelper)
-    $importExportManager.ExportSolutions($exportContext, $table)
+    if ($errors -gt 0) { Fail "ExportSolutions reported $errors error(s) (see log: $LogFile)" }
 
-    # --- Write a re-importable manifest (imports.mf) enumerating EVERY package ---
-    # com.aras* packages live at root; everything else under <leaf>\Import (matches the
-    # folder layout ExportSolutions writes and the import convention).
-    $mfPath = Join-Path $OutDir "imports.mf"
-    $xml = New-Object System.Xml.XmlDocument
-    $root = $xml.CreateElement("imports")
-    [void]$xml.AppendChild($root)
-    foreach ($pkgName in $packageNames) {
-        $pkgEl = $xml.CreateElement("package")
-        $pkgEl.SetAttribute("name", $pkgName)
-        if ($pkgName.StartsWith("com.aras")) {
-            $pkgEl.SetAttribute("path", ".\")
-        } elseif ($pkgName.StartsWith("com.")) {
-            $pkgEl.SetAttribute("path", ($pkgName.Split('.')[-1] + "\Import"))
-        } else {
-            $pkgEl.SetAttribute("path", ($pkgName + "\Import"))
-        }
-        [void]$root.AppendChild($pkgEl)
-    }
-    $xml.Save($mfPath)
-    Write-Output "INFO: wrote manifest $mfPath ($($packageNames.Count) package(s))"
+    # Sanity: the engine should have written at least one .xml plus its imports.mf.
+    $xmlCount = (Get-ChildItem -Path $OutDir -Recurse -Filter *.xml -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    if ($xmlCount -eq 0) { Fail "Export produced no .xml files in $OutDir (engine reported no error, but nothing was written)" }
 
+    Write-Output "INFO: exported $($idArr.Count) item(s); $xmlCount xml file(s) written"
     Write-Output "ARAS_EXPORT_OK"
     exit 0
 }
