@@ -153,6 +153,16 @@ export class ArasClient {
     this.token = undefined
   }
 
+  /** The login name this connection authenticated with. */
+  get username(): string {
+    return this.creds.username
+  }
+
+  /** The database this connection is bound to. */
+  get database(): string {
+    return this.creds.database
+  }
+
   /**
    * Execute a raw AML body. The body is wrapped in a SOAP envelope and POSTed to the
    * Innovator AML gateway. Returns parsed items, or throws on fault/HTTP error.

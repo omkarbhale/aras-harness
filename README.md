@@ -15,6 +15,7 @@ domain layer (OAuth, AML, OData, parsing, retry, write-gating) exposed as MCP to
 | `aras_connect` | — | Authenticate (OAuth password grant) and set the active connection |
 | `aras_list_profiles` | read | List saved connection profiles |
 | `aras_status` | read | Active connection + round-trip latency |
+| `aras_whoami` | read | Connected user's `id`/name/email + connection + database |
 | `aras_run_query` | read | Run read-only AML (`action="get"`); rejects mutations |
 | `aras_run_write` | **destructive** | Run mutating AML (add/update/delete/promote/…); never retried |
 | `aras_run_odata` | read | Run an OData GET against `/server/odata` |

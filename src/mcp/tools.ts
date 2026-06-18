@@ -51,6 +51,16 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/** Escape the five XML metacharacters for safe interpolation into an AML value. */
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
 // OData entity payloads carry navigation/association/context annotations on every
 // property — typically several times the size of the useful data. Drop them, but keep
 // the human label (@aras.keyed_name), the real id (@aras.id), and paging hints.
@@ -168,6 +178,48 @@ export class ArasTools {
         profiles: names.map((name) => ({ name, url: profiles[name].url, database: profiles[name].database }))
       })
     )
+  }
+
+  /**
+   * Resolve the connected login to its User item. The `id` it returns is what
+   * `created_by_id` / `owned_by_id` / `managed_by_id` filters compare against, so this
+   * saves the agent a manual User lookup before every "items created by me" query.
+   */
+  async whoami(): Promise<ToolResult> {
+    if (!this.conn.isConnected()) {
+      return ok(JSON.stringify({ connected: false }))
+    }
+    try {
+      const client = this.conn.getClient()
+      const login = client.username
+      const { items } = await this.readAml(
+        `<AML><Item type="User" action="get" select="id,login_name,keyed_name,first_name,last_name,email">` +
+          `<login_name>${escapeXml(login)}</login_name></Item></AML>`,
+        'aras_whoami'
+      )
+      const base = { connected: true, connection: this.conn.active, database: client.database, login_name: login }
+      const p = items[0]?.properties
+      if (!p) {
+        return ok(
+          JSON.stringify({
+            ...base,
+            note: `Authenticated as "${login}", but no User item matched that login_name.`
+          })
+        )
+      }
+      return ok(
+        JSON.stringify({
+          ...base,
+          id: p.id,
+          name: p.keyed_name ?? p['id@keyed_name'],
+          first_name: p.first_name,
+          last_name: p.last_name,
+          email: p.email
+        })
+      )
+    } catch (e) {
+      return err(messageOf(e))
+    }
   }
 
   async status(): Promise<ToolResult> {

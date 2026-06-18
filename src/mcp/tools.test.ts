@@ -13,6 +13,9 @@ class FakeClient {
   amlHandler: (aml: string) => Promise<AmlResult> = async () => result([])
   /** Per-test override for what runODataQuery returns. */
   odataHandler: (path: string) => Promise<unknown> = async () => ({ value: [{ item_number: 'P-1' }] })
+  /** Mirrors ArasClient's identity getters used by aras_whoami. */
+  username = 'u'
+  database = 'D'
 
   async runAml(aml: string): Promise<AmlResult> {
     this.amlCalls.push(aml)
@@ -256,6 +259,48 @@ describe('status', () => {
     await connect(tools)
     const parsed = JSON.parse((await tools.status()).text)
     expect(parsed).toMatchObject({ connected: true, latencyMs: 7 })
+  })
+})
+
+describe('whoami', () => {
+  it('reports disconnected before connect', async () => {
+    const { tools } = setup()
+    expect(JSON.parse((await tools.whoami()).text)).toEqual({ connected: false })
+  })
+
+  it('resolves the connected login to its User id and details', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async (aml) => {
+      expect(aml).toContain('type="User"')
+      expect(aml).toContain('<login_name>u</login_name>')
+      return result([
+        { id: 'USR1', type: 'User', properties: { id: 'USR1', login_name: 'u', keyed_name: 'Test User', email: 't@x' } }
+      ])
+    }
+    const parsed = JSON.parse((await tools.whoami()).text)
+    expect(parsed).toMatchObject({ connected: true, database: 'D', login_name: 'u', id: 'USR1', name: 'Test User', email: 't@x' })
+  })
+
+  it('notes when the login has no matching User item', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([])
+    const parsed = JSON.parse((await tools.whoami()).text)
+    expect(parsed).toMatchObject({ connected: true, login_name: 'u' })
+    expect(parsed.id).toBeUndefined()
+    expect(parsed.note).toMatch(/no User item matched/)
+  })
+
+  it('escapes XML metacharacters in the login name', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.username = 'a&b<c'
+    fake.amlHandler = async (aml) => {
+      expect(aml).toContain('<login_name>a&amp;b&lt;c</login_name>')
+      return result([])
+    }
+    await tools.whoami()
   })
 })
 
