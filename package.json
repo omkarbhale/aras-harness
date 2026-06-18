@@ -11,6 +11,8 @@
   "files": [
     "dist",
     "skills",
+    "scripts",
+    "native",
     "README.md"
   ],
   "engines": {

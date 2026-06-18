@@ -165,6 +165,53 @@ export function createServer(tools: ArasTools): McpServer {
     async ({ name }) => toMcp(await tools.getMethod(name))
   )
 
+  server.registerTool(
+    'aras_import',
+    {
+      title: 'Import a package manifest',
+      description:
+        'Import an Aras solution into the active instance from a manifest file (.mf), using the ' +
+        'Aras package import/export utilities. Pass the absolute path to the .mf; package folders are ' +
+        'resolved relative to it. Mutates the target instance (merge import). Returns the engine ' +
+        'messages plus the import log. Windows-only (runs the .NET utilities via PowerShell).',
+      inputSchema: {
+        manifestPath: z.string().describe('Absolute path to the manifest (.mf) file to import.')
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+    },
+    async ({ manifestPath }) => toMcp(await tools.importManifest(manifestPath))
+  )
+
+  server.registerTool(
+    'aras_export',
+    {
+      title: 'Export items to a folder',
+      description:
+        'Export a list of items from the active instance into an EMPTY target folder, using the Aras ' +
+        'package import/export utilities. Each item is a triplet { itemType, itemId, keyedName }. Items ' +
+        'are grouped automatically by the package they belong to — one call can span many packages. ' +
+        'The folder must already exist and be empty (a non-empty folder is rejected). Items that belong ' +
+        'to no package are rejected with their names listed. Writes the exported XML plus a re-importable ' +
+        '`imports.mf` enumerating every exported package, and returns the engine messages and export log. ' +
+        'Windows-only (runs the .NET utilities via PowerShell).',
+      inputSchema: {
+        outDir: z.string().describe('Absolute path to an existing, EMPTY folder to export into.'),
+        items: z
+          .array(
+            z.object({
+              itemType: z.string().describe('ItemType name, e.g. "Part".'),
+              itemId: z.string().describe('The item id (32-char) to export.'),
+              keyedName: z.string().describe('Keyed name / label; used as the exported file name.')
+            })
+          )
+          .min(1)
+          .describe('Items to export, as { itemType, itemId, keyedName } triplets.')
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+    },
+    async ({ outDir, items }) => toMcp(await tools.exportItems(outDir, items))
+  )
+
   return server
 }
 

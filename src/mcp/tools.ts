@@ -1,6 +1,7 @@
 import { withRetry, isWriteAml, summarizeAml, type AmlItem, type AmlPageInfo, type AmlResult } from '../aras'
 import type { ConnectionManager } from './connection'
 import { loadProfiles, resolveCredentials, type ConnectInput, type ProfileConfig } from './profiles'
+import { runImport, runExport, type ExportTriplet, type PackageGroups, type PackagingDeps } from './packaging'
 
 const MAX_ITEMS_IN_RESULT = 50
 const ODATA_RESULT_CHARS = 8000
@@ -13,6 +14,8 @@ export interface ToolOptions {
   /** Profiles for connect/list. Defaults to loading the config file lazily. */
   loadProfiles?: () => Record<string, ProfileConfig>
   env?: NodeJS.ProcessEnv
+  /** Injected dependencies for the import/export PowerShell driver (tests mock the runner). */
+  packagingDeps?: PackagingDeps
 }
 
 /** Uniform tool result. `isError` maps to the MCP `isError` flag. */
@@ -128,6 +131,7 @@ export class ArasTools {
   private readonly maxAttempts: number
   private readonly env: NodeJS.ProcessEnv
   private readonly profilesLoader: () => Record<string, ProfileConfig>
+  private readonly packagingDeps: PackagingDeps
 
   constructor(
     private readonly conn: ConnectionManager,
@@ -137,6 +141,7 @@ export class ArasTools {
     this.maxAttempts = opts.maxRetryAttempts ?? 3
     this.env = opts.env ?? process.env
     this.profilesLoader = opts.loadProfiles ?? (() => loadProfiles())
+    this.packagingDeps = opts.packagingDeps ?? {}
   }
 
   private retry<T>(fn: () => Promise<T>): Promise<T> {
@@ -354,6 +359,125 @@ export class ArasTools {
       return ok(summarizeItems(items))
     } catch (e) {
       return err(messageOf(e))
+    }
+  }
+
+  // --- package import / export --------------------------------------------
+
+  /**
+   * Import an Aras solution manifest (.mf) into the connected instance via the
+   * SolutionUpgrade utilities (out-of-process PowerShell + .NET DLLs). Returns the
+   * engine's messages plus the import log so the agent can see exactly what happened.
+   */
+  async importManifest(manifestPath: string): Promise<ToolResult> {
+    let creds
+    try {
+      creds = this.conn.getCredentials()
+    } catch (e) {
+      return err(messageOf(e))
+    }
+    try {
+      const outcome = await runImport(creds, manifestPath, this.packagingDeps)
+      return outcome.ok ? ok(outcome.text) : err(outcome.text)
+    } catch (e) {
+      return err(`Import driver failed: ${messageOf(e)}`)
+    }
+  }
+
+  /**
+   * Resolve which PackageDefinition each item belongs to, by walking
+   * PackageElement(element_id=config_id) -> PackageGroup -> PackageDefinition — the
+   * same chain the Aras package tools use. Items in no package are returned as orphans
+   * (the engine can't export them without a package association).
+   */
+  private async resolveItemPackages(
+    items: ExportTriplet[]
+  ): Promise<{ groups: PackageGroups; orphans: ExportTriplet[] }> {
+    const groups: PackageGroups = {}
+    const orphans: ExportTriplet[] = []
+
+    for (const item of items) {
+      // 1. config_id (what PackageElement.element_id matches; == id for unversioned items).
+      const { items: itemRows } = await this.readAml(
+        `<AML><Item type="${escapeXml(item.itemType)}" action="get" id="${escapeXml(item.itemId)}" select="config_id"/></AML>`,
+        'aras_export'
+      )
+      const configId = itemRows[0]?.properties.config_id ?? item.itemId
+
+      // 2. PackageElement -> source_id (the PackageGroup id).
+      const { items: peRows } = await this.readAml(
+        `<AML><Item type="PackageElement" action="get" select="source_id"><element_id>${escapeXml(configId)}</element_id></Item></AML>`,
+        'aras_export'
+      )
+      const groupId = peRows[0]?.properties.source_id
+      if (peRows.length === 0 || !groupId) {
+        orphans.push(item)
+        continue
+      }
+
+      // 3. PackageGroup -> source_id (the PackageDefinition id).
+      const { items: pgRows } = await this.readAml(
+        `<AML><Item type="PackageGroup" action="get" id="${escapeXml(groupId)}" select="source_id"/></AML>`,
+        'aras_export'
+      )
+      const defId = pgRows[0]?.properties.source_id
+      if (!defId) {
+        orphans.push(item)
+        continue
+      }
+
+      // 4. PackageDefinition -> name.
+      const { items: pdRows } = await this.readAml(
+        `<AML><Item type="PackageDefinition" action="get" id="${escapeXml(defId)}" select="name"/></AML>`,
+        'aras_export'
+      )
+      const packageName = pdRows[0]?.properties.name
+      if (!packageName) {
+        orphans.push(item)
+        continue
+      }
+
+      ;(groups[packageName] ??= []).push(item)
+    }
+
+    return { groups, orphans }
+  }
+
+  /**
+   * Export the given items (itemType / itemId / keyedName triplets) into `outDir`,
+   * which must already exist and be empty. Items are grouped by the package each one
+   * belongs to (one export can span many packages); items in no package are rejected.
+   * Returns the engine's messages plus the export log; a generated `imports.mf`
+   * enumerating every exported package lands in `outDir` for re-import.
+   */
+  async exportItems(outDir: string, items: ExportTriplet[]): Promise<ToolResult> {
+    let creds
+    try {
+      creds = this.conn.getCredentials()
+    } catch (e) {
+      return err(messageOf(e))
+    }
+    if (items.length === 0) return err('Assertion failed: no items given to export.')
+
+    let resolved
+    try {
+      resolved = await this.resolveItemPackages(items)
+    } catch (e) {
+      return err(`Could not resolve item packages: ${messageOf(e)}`)
+    }
+    if (resolved.orphans.length > 0) {
+      const list = resolved.orphans.map((o) => `${o.itemType} "${o.keyedName}" (${o.itemId})`).join(', ')
+      return err(
+        `Export aborted: ${resolved.orphans.length} item(s) belong to no package and cannot be exported: ${list}. ` +
+          'Add them to a PackageDefinition first, then retry.'
+      )
+    }
+
+    try {
+      const outcome = await runExport(creds, outDir, resolved.groups, this.packagingDeps)
+      return outcome.ok ? ok(outcome.text) : err(outcome.text)
+    } catch (e) {
+      return err(`Export driver failed: ${messageOf(e)}`)
     }
   }
 }

@@ -3,6 +3,7 @@ import type { ArasClient } from '../aras'
 import type { AmlResult } from '../aras'
 import { ConnectionManager } from './connection'
 import { ArasTools } from './tools'
+import type { ScriptRunner } from './packaging'
 
 /** Minimal stand-in for ArasClient that records calls and returns canned results. */
 class FakeClient {
@@ -315,5 +316,122 @@ describe('listProfiles', () => {
     const parsed = JSON.parse(tools.listProfiles().text)
     expect(parsed.count).toBe(1)
     expect(parsed.profiles[0]).toEqual({ name: 'dev', url: 'http://x', database: 'D' })
+  })
+})
+
+describe('importManifest / exportItems', () => {
+  it('importManifest errors before spawning when not connected', async () => {
+    const { tools } = setup()
+    const r = await tools.importManifest('C:/x/imports.mf')
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/No active Aras connection/)
+  })
+
+  it('exportItems errors before spawning when not connected', async () => {
+    const { tools } = setup()
+    const r = await tools.exportItems('C:/out', [{ itemType: 'Part', itemId: 'A', keyedName: 'P-1' }])
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/No active Aras connection/)
+  })
+
+  it('importManifest forwards the connected creds to the packaging runner', async () => {
+    const fake = new FakeClient()
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    let seen: { url: string; pw?: string } | undefined
+    const tools = new ArasTools(conn, {
+      loadProfiles: () => ({}),
+      env: {},
+      packagingDeps: {
+        runner: async (scriptPath, args, env) => {
+          seen = { url: args[args.indexOf('-ArasUrl') + 1], pw: env.ARAS_PKG_PASSWORD }
+          return { exitCode: 0, stdout: 'ARAS_IMPORT_OK', stderr: '' }
+        },
+        // Point at a manifest that exists so the pre-check passes.
+        resources: undefined
+      }
+    })
+    await tools.connect({ url: 'http://h/Server', database: 'D', username: 'admin', password: 'pw' })
+
+    // Use this very test file as a stand-in "manifest path that exists".
+    const here = new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+    const r = await tools.importManifest(here)
+    expect(r.isError).toBeFalsy()
+    expect(seen?.url).toBe('http://h/Server')
+    expect(seen?.pw).toBe('pw')
+  })
+})
+
+describe('exportItems package resolution', () => {
+  // amlHandler that resolves Part "ABC" -> package "com.acme.parts"; anything else orphan.
+  function packagedClient(): FakeClient {
+    const fake = new FakeClient()
+    fake.amlHandler = async (aml) => {
+      if (aml.includes('type="PackageElement"')) {
+        // Orphan path: only ABC's config has a package element.
+        if (aml.includes('CFG-ABC')) return result([{ properties: { source_id: 'GROUP-1' } }])
+        return result([])
+      }
+      if (aml.includes('type="PackageGroup"')) return result([{ properties: { source_id: 'DEF-1' } }])
+      if (aml.includes('type="PackageDefinition"')) return result([{ properties: { name: 'com.acme.parts' } }])
+      // Plain item get -> config_id.
+      if (aml.includes('select="config_id"')) {
+        const id = /id="([^"]+)"/.exec(aml)?.[1] ?? ''
+        return result([{ properties: { config_id: `CFG-${id}` } }])
+      }
+      return result([])
+    }
+    return fake
+  }
+
+  function setupWithClient(fake: FakeClient, runner: ScriptRunner) {
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { loadProfiles: () => ({}), env: {}, packagingDeps: { runner } })
+    return { conn, tools }
+  }
+
+  it('groups items by resolved package and passes them to the runner', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'exp-'))
+    try {
+      let groupsJson: string | undefined
+      const fake = packagedClient()
+      const { tools } = setupWithClient(fake, async (_s, args) => {
+        groupsJson = args[args.indexOf('-GroupsJson') + 1]
+        return { exitCode: 0, stdout: 'ARAS_EXPORT_OK', stderr: '' }
+      })
+      await tools.connect({ url: 'http://h/Server', database: 'D', username: 'admin', password: 'pw' })
+      const r = await tools.exportItems(out, [{ itemType: 'Part', itemId: 'ABC', keyedName: 'P-1' }])
+      expect(r.isError).toBeFalsy()
+      expect(JSON.parse(groupsJson!)).toEqual({
+        'com.acme.parts': [{ itemType: 'Part', itemId: 'ABC', keyedName: 'P-1' }]
+      })
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects orphan items (in no package) before exporting', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'exp-'))
+    try {
+      let ran = false
+      const fake = packagedClient()
+      const { tools } = setupWithClient(fake, async () => {
+        ran = true
+        return { exitCode: 0, stdout: 'ARAS_EXPORT_OK', stderr: '' }
+      })
+      await tools.connect({ url: 'http://h/Server', database: 'D', username: 'admin', password: 'pw' })
+      const r = await tools.exportItems(out, [{ itemType: 'Doc', itemId: 'ZZZ', keyedName: 'D-9' }])
+      expect(r.isError).toBe(true)
+      expect(r.text).toMatch(/belong to no package/)
+      expect(r.text).toMatch(/Doc "D-9" \(ZZZ\)/)
+      expect(ran).toBe(false) // never reached the export driver
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true })
+    }
   })
 })

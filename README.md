@@ -22,9 +22,31 @@ domain layer (OAuth, AML, OData, parsing, retry, write-gating) exposed as MCP to
 | `aras_list_itemtypes` | read | All ItemType names |
 | `aras_introspect_itemtype` | read | Properties + RelationshipTypes of an ItemType |
 | `aras_get_method` | read | Source of a Method by name |
+| `aras_import` | **destructive** | Import a solution manifest (`.mf`) into the active instance |
+| `aras_export` | write (local) | Export items (itemType/itemId/keyedName triplets) into an empty folder |
 
 Reads and writes are deliberately separate tools so the host's permission prompt is
 precise: `aras_run_write` carries the MCP `destructiveHint` and is what the host gates.
+
+### Package import / export (Windows-only)
+
+`aras_import` and `aras_export` wrap the Aras package import/export utilities, which
+ship only as .NET Framework assemblies (`IOM.dll` + `Libs.dll` / `Aras.Tools.SolutionUpgrade`).
+There is no AML/OData equivalent, so these two tools shell out to **Windows PowerShell 5.1**
+running the bundled `scripts/import.ps1` / `scripts/export.ps1`; the DLLs are vendored under
+`native/`. They re-authenticate with the same OAuth password grant as the active connection
+(the password is handed to the child via the `ARAS_PKG_PASSWORD` env var, never the command
+line). Each tool returns the engine's progress/error messages **and** the contents of the
+engine log file.
+
+- `aras_import` takes the absolute path to a manifest `.mf`; package folders resolve relative
+  to it. It merge-imports into the live instance (destructive).
+- `aras_export` takes an **empty, existing** target folder and a list of
+  `{ itemType, itemId, keyedName }` triplets. It resolves the package each item belongs to
+  (`PackageElement → PackageGroup → PackageDefinition`) and groups them, so one call can span
+  many packages. Items in **no** package are rejected (listed by name) — add them to a package
+  first. A non-empty or missing folder is rejected with a clear assertion error. It writes the
+  exported XML plus a re-importable `imports.mf` enumerating every exported package.
 
 ## Skills
 
@@ -106,9 +128,11 @@ An optional add→delete round-trip runs only with `ARAS_TEST_ALLOW_WRITE=1`,
 
 ```
 src/aras/   portable Aras domain core (OAuth client, AML parser, retry, write-gate)
-src/mcp/    MCP server: profiles, connection manager, tools, stdio entrypoint
+src/mcp/    MCP server: profiles, connection manager, tools, packaging driver, stdio entrypoint
+scripts/    import.ps1 / export.ps1 — PowerShell drivers for the .NET import/export utilities
+native/     vendored Aras .NET Framework DLLs (IOM.dll, Libs.dll) the scripts load
 skills/     agent-facing usage guidance
 ```
 
 See [PLAN.md](PLAN.md) for the design and the migration from the old harness.
-Roadmap: import/export packages, codetree access, OS-keychain secrets, HTTP/SSE transport.
+Roadmap: codetree access, OS-keychain secrets, HTTP/SSE transport.
