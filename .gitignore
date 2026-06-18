@@ -11,3 +11,7 @@ dist/
 *.ps1
 *.local.*
 scratch/
+
+# ...but the bundled import/export driver scripts ARE tracked (no per-dev data in them).
+!scripts/import.ps1
+!scripts/export.ps1
