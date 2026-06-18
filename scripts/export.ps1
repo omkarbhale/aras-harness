@@ -7,12 +7,12 @@
     Driven by the aras-mcp `aras_export` tool. Loads IOM.dll + Libs.dll and runs the
     SolutionUpgrade ImportExportManager.ExportSolutions over the "selected items" table.
 
-    IMPORTANT — why the work happens in C#:
+    IMPORTANT - why the work happens in C#:
       When ExportSolutions is invoked directly from PowerShell, the engine throws
       "Unable to cast object of type 'System.Management.Automation.PSObject' to type
       'System.Collections.Hashtable'" (PowerShell's ETS wraps an object the engine
       re-casts internally) and silently exports nothing. Building the table and calling
-      the engine entirely inside a compiled C# helper avoids this — PowerShell only ever
+      the engine entirely inside a compiled C# helper avoids this - PowerShell only ever
       hands the helper primitive strings/arrays. Do NOT "simplify" this back into pure PS.
 
     The caller has already resolved which package each item belongs to (orphans are
@@ -66,7 +66,7 @@ try {
     Add-Type -Path $libs
 
     # Flatten the grouped JSON into parallel primitive string arrays in PowerShell, then
-    # hand them to the compiled helper. (Only strings cross the boundary — see note above.)
+    # hand them to the compiled helper. (Only strings cross the boundary - see note above.)
     $groups = $GroupsJson | ConvertFrom-Json
     if ($null -eq $groups) { Fail "GroupsJson did not parse" }
     $pkgArr  = New-Object System.Collections.Generic.List[string]
@@ -100,7 +100,11 @@ public class PkgMessage : Message {
     public override bool? Execute() {
         if (!string.IsNullOrEmpty(Text)) {
             Console.WriteLine("  [{0}] {1}", _prefix, Text);
-            if (_prefix == "ERROR" || _prefix == "ERROR?") _r.Errors++;
+            // The engine is inconsistent about channels: some failures arrive on the
+            // warning channel carrying the "****ErrorMessage****" banner. Count both the
+            // dedicated error channel AND that banner so the error tally is reliable.
+            if (_prefix == "ERROR" || _prefix == "ERROR?" || Text.IndexOf("ErrorMessage", StringComparison.OrdinalIgnoreCase) >= 0)
+                _r.Errors++;
         }
         return true;
     }
@@ -174,13 +178,14 @@ public static class ArasExportRunner {
         $OutDir, $LogFile, $Timeout, $ExportReferenced,
         $pkgArr.ToArray(), $typeArr.ToArray(), $idArr.ToArray(), $nameArr.ToArray())
 
-    if ($errors -gt 0) { Fail "ExportSolutions reported $errors error(s) (see log: $LogFile)" }
-
-    # Sanity: the engine should have written at least one .xml plus its imports.mf.
+    # Per-item errors are the DLL's behaviour and may be partial (some items export, some
+    # don't) - surface the count and let the caller judge from the messages/log rather than
+    # forcing a hard failure. A total failure is still caught by the zero-output check below.
     $xmlCount = (Get-ChildItem -Path $OutDir -Recurse -Filter *.xml -File -ErrorAction SilentlyContinue | Measure-Object).Count
-    if ($xmlCount -eq 0) { Fail "Export produced no .xml files in $OutDir (engine reported no error, but nothing was written)" }
+    if ($xmlCount -eq 0) { Fail "Export produced no .xml files in $OutDir (nothing was written - see messages/log)" }
 
-    Write-Output "INFO: exported $($idArr.Count) item(s); $xmlCount xml file(s) written"
+    Write-Output "ARAS_ENGINE_ERRORS: $errors"
+    Write-Output "INFO: exported $xmlCount xml file(s) from $($idArr.Count) requested item(s)"
     Write-Output "ARAS_EXPORT_OK"
     exit 0
 }

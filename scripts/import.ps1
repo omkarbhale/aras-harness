@@ -12,7 +12,7 @@
     driven directly from PowerShell. Do NOT inline this back into pure PowerShell.
 
     Import is a MERGE import (bMerge=true) and THOROUGH (bFast=false) with vault data
-    (bVault=true) — the safe defaults; -FastMode / -MergeMode can override for manual runs.
+    (bVault=true) - the safe defaults; -FastMode / -MergeMode can override for manual runs.
 
     Contract with the caller:
       - Prints "ARAS_IMPORT_OK" on success, "ARAS_IMPORT_FAIL: <reason>" on failure.
@@ -72,7 +72,10 @@ public class ImpMessage : Message {
     public override bool? Execute() {
         if (!string.IsNullOrEmpty(Text)) {
             Console.WriteLine("  [{0}] {1}", _prefix, Text);
-            if (_prefix == "ERROR" || _prefix == "ERROR?") _r.Errors++;
+            // The engine sometimes routes failures through the warning channel with the
+            // "****ErrorMessage****" banner - count both so the tally is reliable.
+            if (_prefix == "ERROR" || _prefix == "ERROR?" || Text.IndexOf("ErrorMessage", StringComparison.OrdinalIgnoreCase) >= 0)
+                _r.Errors++;
         }
         return true;
     }
@@ -146,8 +149,9 @@ public static class ArasImportRunner {
         $ArasUrl, $ArasDatabase, $ArasUser, $ArasPassword,
         $manifest, $LogFile, $Timeout, $FastMode, $MergeMode)
 
-    if ($errors -gt 0) { Fail "ImportSolutions reported $errors error(s) (see log: $LogFile)" }
-
+    # A non-zero engine return code already hard-fails inside the helper. Remaining per-item
+    # errors may be partial; surface the count and let the caller judge from the log.
+    Write-Output "ARAS_ENGINE_ERRORS: $errors"
     Write-Output "ARAS_IMPORT_OK"
     exit 0
 }

@@ -179,11 +179,13 @@ export async function runImport(
       ],
       { ARAS_PKG_PASSWORD: creds.password }
     )
-    const ok = run.exitCode === 0 && /ARAS_IMPORT_OK/.test(run.stdout)
+    const ran = run.exitCode === 0 && /ARAS_IMPORT_OK/.test(run.stdout)
+    const engineErrors = engineErrorCount(run.stdout)
+    const ok = ran && engineErrors === 0
     const log = readLogTail(logFile, maxLog)
     return {
       ok,
-      text: formatResult({ ok, kind: 'Import', run, log, extra: { manifest: manifestPath } })
+      text: formatResult({ ok, ran, engineErrors, kind: 'Import', run, log, extra: { manifest: manifestPath } })
     }
   } finally {
     try {
@@ -262,12 +264,16 @@ export async function runExport(
       ],
       { ARAS_PKG_PASSWORD: creds.password }
     )
-    const ok = run.exitCode === 0 && /ARAS_EXPORT_OK/.test(run.stdout)
+    const ran = run.exitCode === 0 && /ARAS_EXPORT_OK/.test(run.stdout)
+    const engineErrors = engineErrorCount(run.stdout)
+    const ok = ran && engineErrors === 0
     const log = readLogTail(logFile, maxLog)
     return {
       ok,
       text: formatResult({
         ok,
+        ran,
+        engineErrors,
         kind: 'Export',
         run,
         log,
@@ -283,22 +289,60 @@ export async function runExport(
   }
 }
 
+/**
+ * Pull out the engine's error lines so the agent can judge a *partial* run (some items
+ * processed, some not — the DLL's own behaviour, which we don't override). Catches both
+ * the dedicated error channel (`[ERROR]`/`[ERROR?]`) and the engine's quirk of routing
+ * failures through the warning channel with an `****ErrorMessage****` banner.
+ */
+function extractEngineErrors(stdout: string): string[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => /\[ERROR\??\]/.test(l) || /ErrorMessage/i.test(l))
+}
+
+/**
+ * Authoritative engine error count: the scripts print `ARAS_ENGINE_ERRORS:<n>` (counted
+ * in the C# message factory). Fall back to scraping error lines if that marker is absent.
+ */
+function engineErrorCount(stdout: string): number {
+  const m = /ARAS_ENGINE_ERRORS:\s*(\d+)/.exec(stdout)
+  return m ? Number(m[1]) : extractEngineErrors(stdout).length
+}
+
 function formatResult(opts: {
   ok: boolean
+  ran: boolean
+  engineErrors: number
   kind: 'Import' | 'Export'
   run: ScriptRun
   log: string
   extra: Record<string, string | number>
 }): string {
-  const { ok, kind, run, log, extra } = opts
-  const header = ok ? `${kind} succeeded.` : `${kind} FAILED (exit ${run.exitCode}).`
+  const { ok, ran, engineErrors, kind, run, log, extra } = opts
+
+  // A run that reached completion but logged engine errors is a PARTIAL result — we treat
+  // it as a failure (isError) so the host gates it, while still handing the agent the error
+  // lines + full log so it can see exactly what didn't apply.
+  const header = ok
+    ? `${kind} succeeded.`
+    : ran
+      ? `${kind} FAILED: the engine reported ${engineErrors} error message(s) — the run is PARTIAL (some items may not have applied).`
+      : `${kind} FAILED (exit ${run.exitCode}).`
+
   const meta = Object.entries(extra)
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n')
+
+  const errs = extractEngineErrors(run.stdout)
+  const errBlock = errs.length ? `\n\n--- engine errors (${errs.length}) ---\n${errs.join('\n')}` : ''
+
   const stderr = run.stderr.trim() ? `\n--- stderr ---\n${run.stderr.trim()}` : ''
   return (
-    `${header}\n${meta}\n` +
-    `\n--- messages ---\n${run.stdout.trim() || '(no output)'}` +
+    `${header}\n${meta}` +
+    errBlock +
+    `\n\n--- messages ---\n${run.stdout.trim() || '(no output)'}` +
     stderr +
     `\n\n--- ${kind.toLowerCase()} log ---\n${log}`
   )

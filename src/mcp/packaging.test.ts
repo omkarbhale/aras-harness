@@ -143,6 +143,33 @@ describe('runExport', () => {
   })
 })
 
+describe('engine error surfacing (partial runs)', () => {
+  it('treats a completed-with-errors run as a failure (isError) and surfaces the error lines', async () => {
+    const out = join(tmp, 'out')
+    mkdirSync(out)
+    const runner: ScriptRunner = async () => ({
+      exitCode: 0,
+      stdout:
+        '  [PKG] Exporting package com.acme\n' +
+        '  [INFO] Item 1 of 2: Part - P-1\n' +
+        '  [ERROR] Item 2 of 2: Part - P-2 failed: locked\n' +
+        'ARAS_ENGINE_ERRORS: 1\n' +
+        'ARAS_EXPORT_OK\n',
+      stderr: ''
+    })
+    const r = await runExport(
+      CREDS,
+      out,
+      { 'com.acme': [{ itemType: 'Part', itemId: 'A', keyedName: 'P-1' }] },
+      { runner, platform: 'win32', makeTempDir: () => tmp }
+    )
+    expect(r.ok).toBe(false) // engine reported an error -> partial -> hard failure
+    expect(r.text).toMatch(/PARTIAL/)
+    expect(r.text).toMatch(/engine errors \(1\)/)
+    expect(r.text).toMatch(/P-2 failed: locked/)
+  })
+})
+
 describe('windows-only guard', () => {
   it('refuses import on a non-Windows platform without spawning', async () => {
     const { runner, calls } = fakeRunner()
