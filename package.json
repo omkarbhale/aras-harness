@@ -10,16 +10,13 @@
   },
   "files": [
     "dist",
-    "skills",
-    "scripts",
-    "native",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsup src/mcp/server.ts --format esm --target node20 --out-dir dist --clean",
+    "build": "tsup src/mcp/server.ts --format esm --target node20 --out-dir dist --clean && node scripts/copy-dist-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

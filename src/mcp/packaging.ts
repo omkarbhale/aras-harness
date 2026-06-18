@@ -62,7 +62,26 @@ export function findPackageRoot(startDir = dirname(fileURLToPath(import.meta.url
   throw new Error(`Could not locate package root (no package.json) above ${startDir}`)
 }
 
-export function resolveResources(root = findPackageRoot()): PackagingResources {
+/**
+ * Find the directory that actually holds the bundled resources (`scripts/` + `native/`).
+ * In a distributed build the build step copies these next to `server.js`, so `dist/` is
+ * self-contained — walk up from the module dir and take the first ancestor that has
+ * `scripts/export.ps1`. That's `dist/` for a shipped build and the package root in dev
+ * (tsx/vitest run from `src/`). Falls back to the package root if nothing is bundled, so
+ * the failure surfaces as a missing-resource error rather than a wrong directory.
+ */
+export function findResourceRoot(startDir = dirname(fileURLToPath(import.meta.url))): string {
+  let dir = startDir
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, 'scripts', 'export.ps1'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return findPackageRoot(startDir)
+}
+
+export function resolveResources(root = findResourceRoot()): PackagingResources {
   return {
     importScript: join(root, 'scripts', 'import.ps1'),
     exportScript: join(root, 'scripts', 'export.ps1'),
