@@ -2,9 +2,48 @@ import { withRetry, isWriteAml, summarizeAml, type AmlItem, type AmlPageInfo, ty
 import type { ConnectionManager } from './connection'
 import { loadProfiles, resolveCredentials, type ConnectInput, type ProfileConfig } from './profiles'
 import { runImport, runExport, type ExportTriplet, type PackageGroups, type PackagingDeps } from './packaging'
+import {
+  extractSnippets,
+  likeEscape,
+  literalMatcher,
+  callSiteMatcher,
+  CALLER_PROBES,
+  xml,
+  type Snippet
+} from './methodSearch'
 
 const MAX_ITEMS_IN_RESULT = 50
 const ODATA_RESULT_CHARS = 8000
+/** Methods bigger than this are listed but not snippet-scanned (keeps responses bounded). */
+const MAX_METHOD_BODY_CHARS = 200_000
+
+/** A Method with snippets matched by a search. */
+interface MethodMatch {
+  id: string
+  name: string
+  methodType?: string
+  matchCount?: number
+  snippets?: Snippet[]
+  snippetsTruncated?: boolean
+}
+
+/** A candidate whose body was too large to scan. */
+interface SkippedMethod {
+  id: string
+  name: string
+  sizeChars: number
+}
+
+/**
+ * Map the stored `method_type` to the conceptual server/client split. Aras stores the
+ * concrete language (`C#`, `VB`, `SQL`, `JavaScript`); JavaScript is the client tier,
+ * everything else runs server-side. `any` matches all.
+ */
+function methodTypeMatches(methodType: string | undefined, want: 'server' | 'client' | 'any'): boolean {
+  if (want === 'any') return true
+  const isClient = (methodType ?? '').toLowerCase().includes('javascript')
+  return want === 'client' ? isClient : !isClient
+}
 
 export interface ToolOptions {
   /** Per-call timeout (ms). Default 30 000. */
@@ -357,6 +396,182 @@ export class ArasTools {
       )
       if (items.length === 0) return ok(`No Method named "${name}" was found.`)
       return ok(summarizeItems(items))
+    } catch (e) {
+      return err(messageOf(e))
+    }
+  }
+
+  // --- method search & callers --------------------------------------------
+
+  /**
+   * Core search engine, shared by `searchMethods` and the method-to-method layer of
+   * `findMethodCallers`. Narrows on the server with a literal LIKE over `method_code`
+   * (selecting NO body), caps the candidate set, then fetches bodies only for the
+   * survivors and extracts matched snippets host-side via `matcher`. Bodies never
+   * leave this method — only snippets do.
+   */
+  private async runMethodSearch(opts: {
+    literal: string
+    matcher: (line: string) => boolean
+    nameLike?: string
+    methodType: 'server' | 'client' | 'any'
+    contextLines: number
+    maxMethods: number
+    maxSnippetsPerMethod: number
+    excludeId?: string
+  }): Promise<{ matches: MethodMatch[]; candidateCount: number; truncated: boolean; skipped: SkippedMethod[] }> {
+    const like = `%${likeEscape(opts.literal)}%`
+    const nameCond = opts.nameLike
+      ? `<name condition="like">${xml(`%${likeEscape(opts.nameLike)}%`)}</name>`
+      : ''
+    // Step 1: narrow on the server WITHOUT pulling bodies.
+    const { items: candidates } = await this.readAml(
+      `<AML><Item type="Method" action="get" select="name,method_type">` +
+        `<method_code condition="like">${xml(like)}</method_code>${nameCond}</Item></AML>`,
+      'aras_search_methods'
+    )
+
+    const filtered = candidates
+      .filter((c) => c.id !== opts.excludeId)
+      .filter((c) => methodTypeMatches(c.properties.method_type, opts.methodType))
+    const truncated = filtered.length > opts.maxMethods
+    const chosen = filtered.slice(0, opts.maxMethods)
+    if (chosen.length === 0) {
+      return { matches: [], candidateCount: filtered.length, truncated, skipped: [] }
+    }
+
+    // Step 2: fetch bodies only for the capped survivors.
+    const idlist = chosen.map((c) => c.id).join(',')
+    const { items: bodies } = await this.readAml(
+      `<AML><Item type="Method" action="get" select="name,method_type,method_code" idlist="${xml(idlist)}"/></AML>`,
+      'aras_search_methods'
+    )
+
+    const matches: MethodMatch[] = []
+    const skipped: SkippedMethod[] = []
+    for (const m of bodies) {
+      const code = m.properties.method_code ?? ''
+      if (code.length > MAX_METHOD_BODY_CHARS) {
+        skipped.push({ id: m.id, name: m.properties.name, sizeChars: code.length })
+        continue
+      }
+      const { snippets, matchCount, truncated: snippetsTruncated } = extractSnippets(code, opts.matcher, {
+        contextLines: opts.contextLines,
+        max: opts.maxSnippetsPerMethod
+      })
+      if (matchCount === 0) continue // server LIKE matched but the host matcher didn't
+      matches.push({
+        id: m.id,
+        name: m.properties.name,
+        methodType: m.properties.method_type,
+        matchCount,
+        snippets,
+        snippetsTruncated
+      })
+    }
+    return { matches, candidateCount: filtered.length, truncated, skipped }
+  }
+
+  async searchMethods(input: {
+    pattern: string
+    regex?: string
+    nameLike?: string
+    methodType?: 'server' | 'client' | 'any'
+    contextLines?: number
+    maxMethods?: number
+    maxSnippetsPerMethod?: number
+  }): Promise<ToolResult> {
+    let refine: RegExp | undefined
+    if (input.regex) {
+      try {
+        refine = new RegExp(input.regex, 'i')
+      } catch (e) {
+        return err(`Invalid regex: ${messageOf(e)}`)
+      }
+    }
+    const litMatch = literalMatcher(input.pattern)
+    const matcher = refine ? (line: string) => litMatch(line) && refine!.test(line) : litMatch
+    try {
+      const res = await this.runMethodSearch({
+        literal: input.pattern,
+        matcher,
+        nameLike: input.nameLike,
+        methodType: input.methodType ?? 'any',
+        contextLines: input.contextLines ?? 1,
+        maxMethods: input.maxMethods ?? 50,
+        maxSnippetsPerMethod: input.maxSnippetsPerMethod ?? 5
+      })
+      return ok(
+        JSON.stringify({
+          pattern: input.pattern,
+          regex: input.regex ?? null,
+          candidateCount: res.candidateCount,
+          returnedCount: res.matches.length,
+          truncated: res.truncated,
+          ...(res.skipped.length ? { skipped: res.skipped } : {}),
+          methods: res.matches
+        })
+      )
+    } catch (e) {
+      return err(messageOf(e))
+    }
+  }
+
+  /**
+   * Find what references a Method — method-to-method call sites plus the metadata
+   * bindings declared in {@link CALLER_PROBES}. Each layer is best-effort and
+   * independent: a failing probe degrades to an empty layer with a `warnings` note
+   * rather than failing the whole call (mirrors `introspectItemType`).
+   */
+  async findMethodCallers(input: { name: string; includeSource?: boolean }): Promise<ToolResult> {
+    try {
+      // Resolve the target Method to its id (probes filter on the id, not the name).
+      const { items: found } = await this.readAml(
+        `<AML><Item type="Method" action="get" select="id,name"><name>${xml(input.name)}</name></Item></AML>`,
+        'aras_find_method_callers'
+      )
+      const method = found[0]
+      if (!method) {
+        return ok(JSON.stringify({ method: { name: input.name }, found: false }))
+      }
+      const resolved = { id: method.id, name: method.properties.name ?? input.name }
+      const warnings: string[] = []
+
+      // Layer 1: other Methods that call this one (source search, call-site filtered).
+      let methodCallers: MethodMatch[] = []
+      try {
+        const res = await this.runMethodSearch({
+          literal: resolved.name,
+          matcher: callSiteMatcher(resolved.name),
+          methodType: 'any',
+          contextLines: 1,
+          maxMethods: 100,
+          maxSnippetsPerMethod: input.includeSource ? 3 : 0,
+          excludeId: resolved.id
+        })
+        methodCallers = res.matches.map((m) =>
+          input.includeSource
+            ? { id: m.id, name: m.name, methodType: m.methodType, snippets: m.snippets }
+            : { id: m.id, name: m.name, methodType: m.methodType }
+        )
+        if (res.truncated) warnings.push('method-to-method results truncated at 100 candidates')
+      } catch (e) {
+        warnings.push(`method-to-method layer failed: ${messageOf(e)}`)
+      }
+
+      // Layers 2..n: metadata bindings, driven by the CALLER_PROBES registry.
+      const callers: Record<string, unknown> = { methods: methodCallers }
+      for (const probe of CALLER_PROBES) {
+        try {
+          const { items } = await this.readAml(probe.buildAml(resolved), 'aras_find_method_callers')
+          callers[probe.key] = probe.extract(items)
+        } catch (e) {
+          callers[probe.key] = []
+          warnings.push(`${probe.key} (${probe.label}) failed: ${messageOf(e)}`)
+        }
+      }
+
+      return ok(JSON.stringify({ method: resolved, found: true, callers, warnings }))
     } catch (e) {
       return err(messageOf(e))
     }

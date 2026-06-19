@@ -167,6 +167,83 @@ export function createServer(tools: ArasTools): McpServer {
   )
 
   server.registerTool(
+    'aras_search_methods',
+    {
+      title: 'Search Method source',
+      description:
+        'Grep across Method source code (method_code) and get back only the matched lines with ' +
+        'context — NOT whole method bodies. Use this to find where logic lives ("which methods touch ' +
+        'Part cost?") before pulling a full method with aras_get_method, which avoids flooding context ' +
+        'with unrelated code. `pattern` is a case-insensitive literal substring (it bounds how many ' +
+        'methods get fetched, so always pass the most specific literal you can). Add `regex` to refine ' +
+        'matches host-side (word boundaries, alternation) over the literal-matched set. Results are ' +
+        'capped by `maxMethods`; `truncated: true` means more matched than were returned — narrow the ' +
+        'pattern. Read-only.',
+      inputSchema: {
+        pattern: z
+          .string()
+          .describe(
+            'Case-insensitive literal substring to find in method source. Required; the more ' +
+              'specific, the fewer bodies are fetched.'
+          ),
+        regex: z
+          .string()
+          .optional()
+          .describe(
+            'Optional regex (case-insensitive) to further filter matched lines, applied only ' +
+              'to methods the literal already matched.'
+          ),
+        nameLike: z.string().optional().describe('Restrict to Methods whose name contains this substring.'),
+        methodType: z
+          .enum(['server', 'client', 'any'])
+          .optional()
+          .describe('Filter by tier: server (C#/VB/SQL) vs client (JavaScript). Default any.'),
+        contextLines: z
+          .number()
+          .int()
+          .min(0)
+          .max(5)
+          .optional()
+          .describe('Lines of context around each matched line (default 1).'),
+        maxMethods: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Max methods to fetch and scan (default 50). Protects context size.'),
+        maxSnippetsPerMethod: z.number().int().min(1).max(20).optional().describe('Default 5.')
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (input) => toMcp(await tools.searchMethods(input))
+  )
+
+  server.registerTool(
+    'aras_find_method_callers',
+    {
+      title: 'Find Method callers',
+      description:
+        'Find what references a Method — answers "what calls this / what breaks if I change it". Returns ' +
+        'three layers: `methods` (other Methods whose source calls it), `actions` (menu/toolbar/API ' +
+        'Actions bound to it), and `itemTypeMethods` (ItemType server-event bindings like onBeforeAdd ' +
+        'that invoke it). Use before editing or deleting a Method to gauge blast radius. Each layer is ' +
+        'best-effort; any that errors comes back empty with a note in `warnings`. Pass includeSource ' +
+        'to get the calling snippet for method-to-method references. `found: false` means no Method has ' +
+        'that exact name. Read-only.',
+      inputSchema: {
+        name: z.string().describe('Exact Method name to find references to.'),
+        includeSource: z
+          .boolean()
+          .optional()
+          .describe('Include the calling snippet for method-to-method references (default false).')
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    async (input) => toMcp(await tools.findMethodCallers(input))
+  )
+
+  server.registerTool(
     'aras_import',
     {
       title: 'Import a package manifest',

@@ -22,6 +22,8 @@ domain layer (OAuth, AML, OData, parsing, retry, write-gating) exposed as MCP to
 | `aras_list_itemtypes` | read | All ItemType names |
 | `aras_introspect_itemtype` | read | Properties + RelationshipTypes of an ItemType |
 | `aras_get_method` | read | Source of a Method by name |
+| `aras_search_methods` | read | Grep Method source — returns matched **snippets**, not whole bodies |
+| `aras_find_method_callers` | read | What references a Method (other methods, Actions, ItemType events) |
 | `aras_import` | **destructive** | Import a solution manifest (`.mf`) into the active instance |
 | `aras_export` | write (local) | Export items (itemType/itemId/keyedName triplets) into an empty folder |
 
@@ -47,6 +49,32 @@ engine log file.
   many packages. Items in **no** package are rejected (listed by name) — add them to a package
   first. A non-empty or missing folder is rejected with a clear assertion error. It writes the
   exported XML plus a re-importable `imports.mf` enumerating every exported package.
+
+### Working with Methods
+
+Method source lives in the `method_code` property. Reading or searching it via raw AML
+returns **whole bodies**, which floods the agent's context on discovery. Two tools fix
+that:
+
+- `aras_search_methods` — grep over `method_code`. Narrows on the server with a literal
+  `LIKE` (selecting no body), caps the candidate set, then fetches bodies only for the
+  survivors and returns **matched lines ± context**, never full methods. `pattern` is a
+  case-insensitive literal (it bounds how many bodies are fetched — be specific); add an
+  optional `regex` to refine, `methodType` to filter server vs client, `maxMethods` to
+  bound cost (`truncated: true` reports when more matched than returned). Use it to locate
+  logic *before* pulling one method whole with `aras_get_method`.
+- `aras_find_method_callers` — "what calls this / what breaks if I change it". Returns
+  three layers: `methods` (other Methods whose source calls it), `actions` (Actions bound
+  to it), and `itemTypeMethods` (ItemType server-event bindings like `onAfterUpdate`).
+  Each layer is best-effort — a failing one degrades to empty with a note in `warnings`
+  rather than failing the call.
+
+The caller layers are **data-driven and easy to extend**: the method-to-method call
+conventions are a list of regexes (`METHOD_CALL_PATTERNS`) and each metadata binding is a
+small `CallerProbe` object (AML + how to parse it) in `CALLER_PROBES`, both in
+[`src/mcp/methodSearch.ts`](src/mcp/methodSearch.ts). Add a pattern or push a probe to
+cover more reference kinds (workflows, lifecycle transitions) — no orchestration change
+needed.
 
 ## Skills
 

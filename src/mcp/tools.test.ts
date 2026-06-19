@@ -435,3 +435,143 @@ describe('exportItems package resolution', () => {
     }
   })
 })
+
+describe('searchMethods', () => {
+  // amlHandler: step-1 candidate query (LIKE, no body) vs step-2 idlist (with body).
+  function searchClient(bodies: Record<string, string>): FakeClient {
+    const fake = new FakeClient()
+    fake.amlHandler = async (aml) => {
+      if (aml.includes('idlist=')) {
+        const ids = /idlist="([^"]+)"/.exec(aml)![1].split(',')
+        return result(ids.map((id) => ({ id, properties: { name: id, method_type: 'C#', method_code: bodies[id] } })))
+      }
+      if (aml.includes('condition="like"')) {
+        // Candidate rows: never carry method_code (proves step-1 doesn't pull bodies).
+        return result(Object.keys(bodies).map((id) => ({ id, properties: { name: id, method_type: 'C#' } })))
+      }
+      return result([])
+    }
+    return fake
+  }
+
+  it('returns matched snippets, not whole bodies, and never selects body in step 1', async () => {
+    const fake = searchClient({ M1: 'a\nhas cost here\nb', M2: 'no match here' })
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+
+    const r = await tools.searchMethods({ pattern: 'cost' })
+    expect(r.isError).toBeFalsy()
+    const out = JSON.parse(r.text)
+    expect(out.returnedCount).toBe(1)
+    expect(out.methods[0].name).toBe('M1')
+    expect(out.methods[0].snippets[0].lines).toContain('has cost here')
+    // Step-1 candidate query must not request method_code.
+    const step1 = fake.amlCalls.find((a) => a.includes('condition="like"'))!
+    expect(step1).not.toContain('method_code" idlist')
+    expect(step1).toContain('select="name,method_type"')
+  })
+
+  it('escapes LIKE wildcards in the pattern', async () => {
+    const fake = searchClient({ M1: '100% done' })
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    await tools.searchMethods({ pattern: '100%' })
+    const step1 = fake.amlCalls.find((a) => a.includes('condition="like"'))!
+    expect(step1).toContain('100[%]')
+  })
+
+  it('flags truncated when candidates exceed maxMethods', async () => {
+    const bodies: Record<string, string> = {}
+    for (let i = 0; i < 5; i++) bodies[`M${i}`] = 'cost'
+    const fake = searchClient(bodies)
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    const out = JSON.parse((await tools.searchMethods({ pattern: 'cost', maxMethods: 2 })).text)
+    expect(out.truncated).toBe(true)
+    expect(out.methods).toHaveLength(2)
+  })
+
+  it('regex refines the literal-matched set', async () => {
+    const fake = searchClient({ M1: 'getCost()', M2: 'costCenter' })
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    const out = JSON.parse((await tools.searchMethods({ pattern: 'cost', regex: 'getCost' })).text)
+    expect(out.returnedCount).toBe(1)
+    expect(out.methods[0].name).toBe('M1')
+  })
+})
+
+describe('findMethodCallers', () => {
+  function callersClient(): FakeClient {
+    const fake = new FakeClient()
+    fake.amlHandler = async (aml) => {
+      // Resolve the target method to its id.
+      if (aml.includes('select="id,name"')) {
+        return result([{ id: 'TGT', properties: { name: 'Part_RecalcCost' } }])
+      }
+      // Method-to-method: step-1 candidates, step-2 bodies.
+      if (aml.includes('idlist=')) {
+        const ids = /idlist="([^"]+)"/.exec(aml)![1].split(',')
+        const src: Record<string, string> = { CALLER: "x.apply('Part_RecalcCost')" }
+        return result(ids.map((id) => ({ id, properties: { name: id, method_type: 'C#', method_code: src[id] } })))
+      }
+      if (aml.includes('condition="like"')) {
+        return result([
+          { id: 'TGT', properties: { name: 'Part_RecalcCost', method_type: 'C#' } }, // self, excluded
+          { id: 'CALLER', properties: { name: 'Part_OnUpdate', method_type: 'C#' } }
+        ])
+      }
+      if (aml.includes('type="Action"')) {
+        return result([{ id: 'A1', properties: { name: 'Recalc', location: 'toolbar' } }])
+      }
+      if (aml.includes('type="ItemType Method"')) {
+        return result([{ id: 'R1', properties: { name: 'onAfterUpdate', 'source_id@keyed_name': 'Part' } }])
+      }
+      return result([])
+    }
+    return fake
+  }
+
+  it('merges method, action, and itemType-event layers', async () => {
+    const fake = callersClient()
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    const out = JSON.parse((await tools.findMethodCallers({ name: 'Part_RecalcCost' })).text)
+    expect(out.found).toBe(true)
+    expect(out.callers.methods.map((m: { id: string }) => m.id)).toEqual(['CALLER']) // self excluded
+    expect(out.callers.actions).toEqual([{ name: 'Recalc', location: 'toolbar' }])
+    expect(out.callers.itemTypeMethods).toEqual([{ itemType: 'Part', event: 'onAfterUpdate' }])
+    expect(out.warnings).toEqual([])
+  })
+
+  it('returns found:false for an unknown method', async () => {
+    const fake = new FakeClient() // default handler returns []
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    const out = JSON.parse((await tools.findMethodCallers({ name: 'Ghost' })).text)
+    expect(out.found).toBe(false)
+  })
+
+  it('degrades a failing layer to empty + warning instead of failing the call', async () => {
+    const fake = callersClient()
+    const base = fake.amlHandler
+    fake.amlHandler = async (aml) => {
+      if (aml.includes('type="Action"')) throw new Error('boom')
+      return base(aml)
+    }
+    const conn = new ConnectionManager(() => fake as unknown as ArasClient)
+    const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
+    await connect(tools)
+    const r = await tools.findMethodCallers({ name: 'Part_RecalcCost' })
+    expect(r.isError).toBeFalsy()
+    const out = JSON.parse(r.text)
+    expect(out.callers.actions).toEqual([])
+    expect(out.warnings.join(' ')).toMatch(/actions.*failed/)
+  })
+})
