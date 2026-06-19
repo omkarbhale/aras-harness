@@ -10,30 +10,54 @@ domain layer (OAuth, AML, OData, parsing, retry, write-gating) exposed as MCP to
 
 ## Install in Claude Code
 
+### Use a prebuilt `dist/` (no repo, no build)
+
+If you were handed a built `dist/` folder, you need **nothing but Node ≥20** — no source,
+no `npm install`, no `npm run build`. The dependencies are bundled into `dist/server.js`.
+
+Register it **globally** (available in every project) with the CLI:
+
 ```bash
-git clone <this-repo> aras-mcp && cd aras-mcp
-npm install
-npm run build      # produces a self-contained dist/ (server + scripts + native DLLs + skills)
+claude mcp add --scope user --transport stdio aras -- node /abs/path/to/dist/server.js
 ```
 
-Register the server — project-local `.mcp.json` in your repo, or your user config:
+On Windows use the absolute path to the file, e.g.
+`node C:/Users/you/aras/dist/server.js` (forward slashes are fine). To pass a password via
+env instead of inline, add `--env ARAS_PASSWORD=...` **before** `--transport`.
+
+Or add it by hand to the **root** `mcpServers` block of `~/.claude.json` (root = global;
+nesting it under a project path scopes it to that project only):
 
 ```json
 {
   "mcpServers": {
     "aras": {
       "command": "node",
-      "args": ["/abs/path/to/aras-mcp/dist/server.js"],
-      "env": { "ARAS_PASSWORD_DEV": "..." }
+      "args": ["/abs/path/to/dist/server.js"],
+      "env": {}
     }
   }
 }
 ```
 
-`dist/` is self-contained after `npm run build`: you can copy it anywhere and run
-`node dist/server.js` without the source tree. Restart Claude Code, then point it at an
-Aras instance by adding a connection profile (see [Connecting](#connecting-to-an-aras-instance))
-and calling `aras_connect` — e.g. `aras_connect({ profile: "dev" })`.
+Then **restart Claude Code** to load the server, and connect:
+`aras_connect({ url, database, username, password })`, or via a saved profile (see
+[Connecting](#connecting-to-an-aras-instance)).
+
+> Keep `scripts/`, `native/`, and `skills/` inside the copied `dist/` — `server.js`
+> resolves them next to itself, and the `aras_import` / `aras_export` tools need them.
+> Copy the whole `dist/` folder, not just `server.js`.
+
+### Build from source
+
+```bash
+git clone <this-repo> aras-mcp && cd aras-mcp
+npm install
+npm run build      # produces a self-contained dist/ (server + scripts + native DLLs + skills)
+```
+
+`dist/` is self-contained after the build: copy it anywhere and run `node dist/server.js`
+without the source tree. Register it the same way as above.
 
 ## Tools
 
