@@ -8,6 +8,33 @@ mutate it over AML and OData — plus a set of skills teaching the agent how to 
 The agent loop, UI, and session storage are the host's job. This repo is just the Aras
 domain layer (OAuth, AML, OData, parsing, retry, write-gating) exposed as MCP tools.
 
+## Install in Claude Code
+
+```bash
+git clone <this-repo> aras-mcp && cd aras-mcp
+npm install
+npm run build      # produces a self-contained dist/ (server + scripts + native DLLs + skills)
+```
+
+Register the server — project-local `.mcp.json` in your repo, or your user config:
+
+```json
+{
+  "mcpServers": {
+    "aras": {
+      "command": "node",
+      "args": ["/abs/path/to/aras-mcp/dist/server.js"],
+      "env": { "ARAS_PASSWORD_DEV": "..." }
+    }
+  }
+}
+```
+
+`dist/` is self-contained after `npm run build`: you can copy it anywhere and run
+`node dist/server.js` without the source tree. Restart Claude Code, then point it at an
+Aras instance by adding a connection profile (see [Connecting](#connecting-to-an-aras-instance))
+and calling `aras_connect` — e.g. `aras_connect({ profile: "dev" })`.
+
 ## Tools
 
 | Tool | Kind | Purpose |
@@ -89,7 +116,7 @@ Markdown guidance the agent can load on demand (`skills/`):
 
 ```bash
 npm install
-npm run build      # tsup -> dist/server.js  (ESM, node20)
+npm run build      # tsup -> dist/server.js, then copies scripts/native/skills into dist/ (self-contained)
 npm test           # unit tests (live tests auto-skip without creds)
 npm run dev        # run from source via tsx
 ```
