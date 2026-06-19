@@ -86,4 +86,25 @@ describe('CALLER_PROBES registry', () => {
     ])
     expect(hits).toEqual([{ name: 'Recalc', location: 'toolbar' }])
   })
+
+  it('serverEvents probe queries "Server Event" and extracts host + event name', () => {
+    const se = CALLER_PROBES.find((p) => p.key === 'serverEvents')!
+    expect(se.buildAml({ id: 'M1', name: 'Foo' })).toContain('type="Server Event"')
+    const hits = se.extract([
+      {
+        id: 'r1',
+        type: 'Server Event',
+        properties: { 'source_id@keyed_name': 'Part', server_event: 'onAfterUpdate' }
+      }
+    ])
+    expect(hits).toEqual([{ boundTo: 'Part', event: 'onAfterUpdate' }])
+  })
+
+  it('an event binding without eventProp omits the event name', () => {
+    const fe = CALLER_PROBES.find((p) => p.key === 'formEvents')!
+    const hits = fe.extract([
+      { id: 'r1', type: 'Form Event', properties: { 'source_id@keyed_name': 'Part Form' } }
+    ])
+    expect(hits).toEqual([{ boundTo: 'Part Form', event: undefined }])
+  })
 })

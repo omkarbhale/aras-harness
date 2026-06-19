@@ -225,12 +225,12 @@ export function createServer(tools: ArasTools): McpServer {
       title: 'Find Method callers',
       description:
         'Find what references a Method — answers "what calls this / what breaks if I change it". Returns ' +
-        'three layers: `methods` (other Methods whose source calls it), `actions` (menu/toolbar/API ' +
-        'Actions bound to it), and `itemTypeMethods` (ItemType server-event bindings like onBeforeAdd ' +
-        'that invoke it). Use before editing or deleting a Method to gauge blast radius. Each layer is ' +
-        'best-effort; any that errors comes back empty with a note in `warnings`. Pass includeSource ' +
-        'to get the calling snippet for method-to-method references. `found: false` means no Method has ' +
-        'that exact name. Read-only.',
+        'layers under `callers`: `methods` (other Methods whose source calls it), `actions` (menu/toolbar/' +
+        'API Actions bound to it), and event-handler bindings `serverEvents` (ItemType server events like ' +
+        'onBeforeAdd — includes the event name), `clientEvents`, and `formEvents`. Use before editing or ' +
+        'deleting a Method to gauge blast radius. Each layer is best-effort; any that errors comes back ' +
+        'empty with a note in `warnings`. Pass includeSource to get the calling snippet for ' +
+        'method-to-method references. `found: false` means no Method has that exact name. Read-only.',
       inputSchema: {
         name: z.string().describe('Exact Method name to find references to.'),
         includeSource: z

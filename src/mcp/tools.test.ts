@@ -528,15 +528,17 @@ describe('findMethodCallers', () => {
       if (aml.includes('type="Action"')) {
         return result([{ id: 'A1', properties: { name: 'Recalc', location: 'toolbar' } }])
       }
-      if (aml.includes('type="ItemType Method"')) {
-        return result([{ id: 'R1', properties: { name: 'onAfterUpdate', 'source_id@keyed_name': 'Part' } }])
+      if (aml.includes('type="Server Event"')) {
+        return result([
+          { id: 'R1', properties: { 'source_id@keyed_name': 'Part', server_event: 'onAfterUpdate' } }
+        ])
       }
-      return result([])
+      return result([]) // Client/Form Event layers -> empty
     }
     return fake
   }
 
-  it('merges method, action, and itemType-event layers', async () => {
+  it('merges method, action, and server-event layers', async () => {
     const fake = callersClient()
     const conn = new ConnectionManager(() => fake as unknown as ArasClient)
     const tools = new ArasTools(conn, { maxRetryAttempts: 1, loadProfiles: () => ({}), env: {} })
@@ -545,7 +547,8 @@ describe('findMethodCallers', () => {
     expect(out.found).toBe(true)
     expect(out.callers.methods.map((m: { id: string }) => m.id)).toEqual(['CALLER']) // self excluded
     expect(out.callers.actions).toEqual([{ name: 'Recalc', location: 'toolbar' }])
-    expect(out.callers.itemTypeMethods).toEqual([{ itemType: 'Part', event: 'onAfterUpdate' }])
+    expect(out.callers.serverEvents).toEqual([{ boundTo: 'Part', event: 'onAfterUpdate' }])
+    expect(out.callers.clientEvents).toEqual([])
     expect(out.warnings).toEqual([])
   })
 

@@ -91,16 +91,19 @@ that:
   bound cost (`truncated: true` reports when more matched than returned). Use it to locate
   logic *before* pulling one method whole with `aras_get_method`.
 - `aras_find_method_callers` — "what calls this / what breaks if I change it". Returns
-  three layers: `methods` (other Methods whose source calls it), `actions` (Actions bound
-  to it), and `itemTypeMethods` (ItemType server-event bindings like `onAfterUpdate`).
-  Each layer is best-effort — a failing one degrades to empty with a note in `warnings`
-  rather than failing the call.
+  layers under `callers`: `methods` (other Methods whose source calls it), `actions`
+  (Actions bound to it), and event-handler bindings `serverEvents` (ItemType server events
+  like `onAfterUpdate`, with the event name), `clientEvents`, and `formEvents`. Each layer
+  is best-effort — a failing one degrades to empty with a note in `warnings` rather than
+  failing the call.
 
-The caller layers are **data-driven and easy to extend**: the method-to-method call
-conventions are a list of regexes (`METHOD_CALL_PATTERNS`) and each metadata binding is a
-small `CallerProbe` object (AML + how to parse it) in `CALLER_PROBES`, both in
-[`src/mcp/methodSearch.ts`](src/mcp/methodSearch.ts). Add a pattern or push a probe to
-cover more reference kinds (workflows, lifecycle transitions) — no orchestration change
+The caller layers are **data-driven and easy to extend**, all in
+[`src/mcp/methodSearch.ts`](src/mcp/methodSearch.ts): method-to-method call conventions are
+a list of regexes (`METHOD_CALL_PATTERNS`); event-handler bindings are a list of
+descriptors (`METHOD_EVENT_BINDINGS` — Aras exposes ~20 relationship types that bind a
+Method, e.g. `Server Event`, `Client Event`, `Workflow Map Path Pre/Post`); and any other
+metadata reference is a small `CallerProbe` object (AML + how to parse it) in
+`CALLER_PROBES`. Add a regex, a binding descriptor, or a probe — no orchestration change
 needed.
 
 ## Skills
