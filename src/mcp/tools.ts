@@ -337,6 +337,33 @@ export class ArasTools {
     }
   }
 
+  async promoteItem(input: {
+    itemType: string
+    itemId: string
+    state: string
+    outFile?: string
+  }): Promise<ToolResult> {
+    try {
+      const client = this.conn.getClient()
+      const aml =
+        `<AML><Item type="${escapeXml(input.itemType)}" action="promoteItem" ` +
+        `id="${escapeXml(input.itemId)}"><state>${escapeXml(input.state)}</state></Item></AML>`
+      // Mutation: run exactly once, never retry (a "failure" may have committed).
+      const result = await withTimeout(client.runAml(aml), this.timeoutMs, 'aras_promote_item')
+      if (input.outFile) {
+        writeFileSync(
+          input.outFile,
+          JSON.stringify({ count: result.items.length, items: result.items }, null, 2),
+          'utf8'
+        )
+        return ok(JSON.stringify({ saved: input.outFile, count: result.items.length }))
+      }
+      return ok(summarizeItems(result.items))
+    } catch (e) {
+      return err(messageOf(e))
+    }
+  }
+
   async runOData(query: string, outFile?: string): Promise<ToolResult> {
     try {
       const client = this.conn.getClient()

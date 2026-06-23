@@ -125,6 +125,35 @@ export function createServer(tools: ArasTools): McpServer {
   )
 
   server.registerTool(
+    'aras_promote_item',
+    {
+      title: 'Promote an item (lifecycle)',
+      description:
+        'Promote a single item to a target lifecycle state. Builds the correct promoteItem AML ' +
+        'for you — pass the ItemType, the item id, and the exact target state NAME (e.g. "Released"). ' +
+        'The target state must be a state the item can transition to from its CURRENT state per the ' +
+        "item's Life Cycle Map; otherwise Aras returns a fault and this tool returns an error. " +
+        'Runs once, never retried. Use aras_run_query first to read the current `state` if unsure. ' +
+        'With outFile: the full response is written as pretty-printed JSON to that absolute path and ' +
+        'only { saved, count } is returned to the agent.',
+      inputSchema: {
+        itemType: z.string().describe('Exact ItemType name, e.g. "Part".'),
+        itemId: z.string().describe('The 32-char id of the item to promote.'),
+        state: z
+          .string()
+          .describe('Exact target lifecycle state name, e.g. "Released". This is the destination state.'),
+        outFile: z
+          .string()
+          .optional()
+          .describe('Absolute path to write the full response as JSON instead of returning it in-context.')
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    },
+    async ({ itemType, itemId, state, outFile }) =>
+      toMcp(await tools.promoteItem({ itemType, itemId, state, outFile }))
+  )
+
+  server.registerTool(
     'aras_run_odata',
     {
       title: 'Run OData query (read-only)',
