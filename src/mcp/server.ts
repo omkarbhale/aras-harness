@@ -81,15 +81,24 @@ export function createServer(tools: ArasTools): McpServer {
         'Run a read-only AML query (action="get") against the active instance. Rejects mutating AML — ' +
         'use aras_run_write for changes. Pass a complete document, e.g. ' +
         '<AML><Item type="Part" action="get" select="id,item_number" maxRecords="25"/></AML>. ' +
-        'Results are capped at 50 items; for larger sets page with the AML attributes ' +
-        '`page` + `pagesize` (1-based) — the response then includes a `page` block ' +
-        '{ page, pageMax, itemMax } so you know the true total and how many pages remain.',
+        'Without outFile, results are capped at 50 items; page with AML attributes `page` + `pagesize` ' +
+        '(1-based) — the response includes a `page` block { page, pageMax, itemMax }. ' +
+        'With outFile: ALL items are written as pretty-printed JSON to that absolute path (the 50-item ' +
+        'cap is bypassed), and only { saved, count } is returned to the agent — use this for large result ' +
+        'sets you intend to analyse locally rather than read in-context.',
       inputSchema: {
-        aml: z.string().describe('A complete read-only AML document wrapped in <AML>...</AML>.')
+        aml: z.string().describe('A complete read-only AML document wrapped in <AML>...</AML>.'),
+        outFile: z
+          .string()
+          .optional()
+          .describe(
+            'Absolute path to write results as JSON. Bypasses the 50-item context cap; ' +
+              'only { saved, count } is returned to the agent.'
+          )
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
-    async ({ aml }) => toMcp(await tools.runQuery(aml))
+    async ({ aml, outFile }) => toMcp(await tools.runQuery(aml, outFile))
   )
 
   server.registerTool(
@@ -100,13 +109,19 @@ export function createServer(tools: ArasTools): McpServer {
         'Execute MUTATING AML (add/update/delete/promoteItem/lock/unlock/...) against the active ' +
         'instance. Runs once, never retried. Requires a recognized mutating action; use ' +
         'aras_run_query for reads. Note: custom server-method actions are not recognized as ' +
-        'mutating — invoke those with care.',
+        'mutating — invoke those with care. ' +
+        'With outFile: the full response is written as pretty-printed JSON to that absolute path and ' +
+        'only { saved, count } is returned to the agent.',
       inputSchema: {
-        aml: z.string().describe('A complete mutating AML document wrapped in <AML>...</AML>.')
+        aml: z.string().describe('A complete mutating AML document wrapped in <AML>...</AML>.'),
+        outFile: z
+          .string()
+          .optional()
+          .describe('Absolute path to write the full response as JSON instead of returning it in-context.')
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
-    async ({ aml }) => toMcp(await tools.runWrite(aml))
+    async ({ aml, outFile }) => toMcp(await tools.runWrite(aml, outFile))
   )
 
   server.registerTool(
@@ -117,14 +132,25 @@ export function createServer(tools: ArasTools): McpServer {
         'Run a read-only OData GET against /server/odata, e.g. ' +
         '`Part?$top=10&$select=item_number,name&$filter=...`. ' +
         'Verbose @odata navigation annotations are stripped (the @aras.keyed_name / @aras.id ' +
-        'labels are kept); oversized responses are truncated at a row boundary as valid JSON with ' +
-        'a `@truncated` marker — page with $top/$skip and trim fields with $select.',
+        'labels are kept). Without outFile, oversized responses are truncated at a row boundary as ' +
+        'valid JSON with a `@truncated` marker — page with $top/$skip and trim fields with $select. ' +
+        'With outFile: the FULL cleaned response is written as pretty-printed JSON to that absolute ' +
+        'path (the 8 000-char context truncation is bypassed), and only { saved, rowCount } is ' +
+        'returned to the agent — use this for large result sets (e.g. timesheets, logs) you intend ' +
+        'to analyse locally rather than read in-context.',
       inputSchema: {
-        query: z.string().describe('OData path + query appended to /server/odata/')
+        query: z.string().describe('OData path + query appended to /server/odata/'),
+        outFile: z
+          .string()
+          .optional()
+          .describe(
+            'Absolute path to write the full response as JSON. Bypasses the 8 000-char context ' +
+              'truncation; only { saved, rowCount } is returned to the agent.'
+          )
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
-    async ({ query }) => toMcp(await tools.runOData(query))
+    async ({ query, outFile }) => toMcp(await tools.runOData(query, outFile))
   )
 
   server.registerTool(

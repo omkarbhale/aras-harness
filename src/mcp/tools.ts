@@ -1,3 +1,4 @@
+import { writeFileSync } from 'fs'
 import { withRetry, isWriteAml, summarizeAml, type AmlItem, type AmlPageInfo, type AmlResult } from '../aras'
 import type { ConnectionManager } from './connection'
 import { loadProfiles, resolveCredentials, type ConnectInput, type ProfileConfig } from './profiles'
@@ -284,7 +285,7 @@ export class ArasTools {
 
   // --- queries ------------------------------------------------------------
 
-  async runQuery(aml: string): Promise<ToolResult> {
+  async runQuery(aml: string, outFile?: string): Promise<ToolResult> {
     if (isWriteAml(aml)) {
       return err(
         `This AML contains a mutating action (${summarizeAml(aml)}). ` +
@@ -293,13 +294,32 @@ export class ArasTools {
     }
     try {
       const result = await this.readAml(aml, 'aras_run_query')
+      if (outFile) {
+        const payload = JSON.stringify(
+          {
+            count: result.items.length,
+            ...(result.pageInfo ? { page: result.pageInfo } : {}),
+            items: result.items
+          },
+          null,
+          2
+        )
+        writeFileSync(outFile, payload, 'utf8')
+        return ok(
+          JSON.stringify({
+            saved: outFile,
+            count: result.items.length,
+            ...(result.pageInfo ? { page: result.pageInfo } : {})
+          })
+        )
+      }
       return ok(summarizeItems(result.items, result.pageInfo))
     } catch (e) {
       return err(messageOf(e))
     }
   }
 
-  async runWrite(aml: string): Promise<ToolResult> {
+  async runWrite(aml: string, outFile?: string): Promise<ToolResult> {
     if (!isWriteAml(aml)) {
       return err('This AML has no mutating action — use aras_run_query for reads.')
     }
@@ -307,13 +327,17 @@ export class ArasTools {
       // Run exactly once: never retry a write (a "failure" may have committed).
       const client = this.conn.getClient()
       const result = await withTimeout(client.runAml(aml), this.timeoutMs, 'aras_run_write')
+      if (outFile) {
+        writeFileSync(outFile, JSON.stringify({ count: result.items.length, items: result.items }, null, 2), 'utf8')
+        return ok(JSON.stringify({ saved: outFile, count: result.items.length }))
+      }
       return ok(summarizeItems(result.items))
     } catch (e) {
       return err(messageOf(e))
     }
   }
 
-  async runOData(query: string): Promise<ToolResult> {
+  async runOData(query: string, outFile?: string): Promise<ToolResult> {
     try {
       const client = this.conn.getClient()
       const result = await withTimeout(
@@ -321,6 +345,15 @@ export class ArasTools {
         this.timeoutMs,
         'aras_run_odata'
       )
+      if (outFile) {
+        const clean = stripODataNoise(result)
+        writeFileSync(outFile, JSON.stringify(clean, null, 2), 'utf8')
+        const rowCount =
+          clean && typeof clean === 'object' && Array.isArray((clean as { value?: unknown[] }).value)
+            ? (clean as { value: unknown[] }).value.length
+            : undefined
+        return ok(JSON.stringify({ saved: outFile, ...(rowCount !== undefined ? { rowCount } : {}) }))
+      }
       return ok(summarizeOData(result, ODATA_RESULT_CHARS))
     } catch (e) {
       return err(messageOf(e))
