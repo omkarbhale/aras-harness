@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { ArasClient } from '../aras'
 import type { AmlResult } from '../aras'
+import { ArasFaultError } from '../aras/errors'
 import { ConnectionManager } from './connection'
 import { ArasTools } from './tools'
 import type { ScriptRunner } from './packaging'
@@ -105,6 +106,58 @@ describe('read/write split', () => {
     expect(r.isError).toBeFalsy()
     expect(fake.amlCalls).toHaveLength(1)
     expect(JSON.parse(r.text)).toMatchObject({ count: 1 })
+  })
+})
+
+describe('ArasTools.promoteItem', () => {
+  it('builds correct AML with proper escaping', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([{ id: 'ABC', type: 'Part', properties: { state: 'Released' } }])
+    const r = await tools.promoteItem({ itemType: 'Part', itemId: 'ABC', state: 'Released' })
+    expect(r.isError).toBeFalsy()
+    expect(fake.amlCalls).toHaveLength(1)
+    const aml = fake.amlCalls[0]
+    expect(aml).toContain('type="Part"')
+    expect(aml).toContain('action="promoteItem"')
+    expect(aml).toContain('id="ABC"')
+    expect(aml).toContain('<state>Released</state>')
+  })
+
+  it('escapes values in AML', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => result([{ id: '123', type: 'Part', properties: { state: 'Released' } }])
+    const r = await tools.promoteItem({
+      itemType: 'Part',
+      itemId: '123',
+      state: 'In <Work> & "Review"'
+    })
+    expect(r.isError).toBeFalsy()
+    const aml = fake.amlCalls[0]
+    expect(aml).toContain('&lt;')
+    expect(aml).toContain('&amp;')
+    expect(aml).toContain('&quot;')
+    expect(aml).not.toContain('<Work>')
+    expect(aml).not.toContain('& "')
+  })
+
+  it('surfaces a fault error from the server', async () => {
+    const { tools, fake } = setup()
+    await connect(tools)
+    fake.amlHandler = async () => {
+      throw new ArasFaultError('Invalid transition')
+    }
+    const r = await tools.promoteItem({ itemType: 'Part', itemId: 'ABC', state: 'BadState' })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/Invalid transition/)
+  })
+
+  it('fails with a readable error before connecting', async () => {
+    const { tools } = setup()
+    const r = await tools.promoteItem({ itemType: 'Part', itemId: 'ABC', state: 'Released' })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/No active Aras connection/)
   })
 })
 
