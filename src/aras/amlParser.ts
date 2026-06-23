@@ -5,11 +5,13 @@ import { ArasFaultError } from './errors'
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
-  // Keep text content under a predictable key.
   textNodeName: '#text',
   parseAttributeValue: false,
   parseTagValue: false,
-  trimValues: true
+  trimValues: true,
+  // Aras method_code is HTML-entity-heavy (source code XML-encoded).
+  // Default limit (1000) blows up on large responses. Trusted server data — no XXE risk.
+  processEntities: { enabled: true, maxTotalExpansions: 100_000 }
 })
 
 type XmlNode = Record<string, unknown>
