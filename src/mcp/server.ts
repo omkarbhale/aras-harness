@@ -226,14 +226,19 @@ export function createServer(tools: ArasTools): McpServer {
     {
       title: 'Search Method source',
       description:
-        'Grep across Method source code (method_code) and get back only the matched lines with ' +
-        'context — NOT whole method bodies. Use this to find where logic lives ("which methods touch ' +
-        'Part cost?") before pulling a full method with aras_get_method, which avoids flooding context ' +
-        'with unrelated code. `pattern` is a case-insensitive literal substring (it bounds how many ' +
-        'methods get fetched, so always pass the most specific literal you can). Add `regex` to refine ' +
-        'matches host-side (word boundaries, alternation) over the literal-matched set. Results are ' +
-        'capped by `maxMethods`; `truncated: true` means more matched than were returned — narrow the ' +
-        'pattern. Read-only.',
+        'Grep across Method source code (method_code) and get back matched lines with context — NOT ' +
+        'whole method bodies. Use this to find where logic lives ("which methods touch Part cost?") ' +
+        'before pulling a full method with aras_get_method. ' +
+        '`pattern` is a case-insensitive literal substring sent to the server (bounds how many methods ' +
+        'get fetched — always pass the most specific literal you can). Add `regex` to refine matches ' +
+        'host-side (word boundaries, alternation). Use `nameLike` to restrict by method name substring. ' +
+        '`methodType` filters server (C#/VB/SQL) vs client (JavaScript). ' +
+        'Results are capped by `maxMethods` (default 50); `truncated: true` means more matched than ' +
+        'were returned — narrow the pattern or use `nameLike`. ' +
+        'With `outFile`: the full JSON result is written to that absolute path and only ' +
+        '{ saved, candidateCount, returnedCount, truncated } is returned — use this for broad surveys ' +
+        '("which 200 methods reference getItemById?") where you need the list on disk, not in context. ' +
+        'Read-only.',
       inputSchema: {
         pattern: z
           .string()
@@ -267,7 +272,11 @@ export function createServer(tools: ArasTools): McpServer {
           .max(200)
           .optional()
           .describe('Max methods to fetch and scan (default 50). Protects context size.'),
-        maxSnippetsPerMethod: z.number().int().min(1).max(20).optional().describe('Default 5.')
+        maxSnippetsPerMethod: z.number().int().min(1).max(20).optional().describe('Default 5.'),
+        outFile: z
+          .string()
+          .optional()
+          .describe('Absolute path to write full JSON results to disk instead of returning in-context.')
       },
       annotations: { readOnlyHint: true, openWorldHint: true }
     },

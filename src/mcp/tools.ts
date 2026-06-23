@@ -540,6 +540,7 @@ export class ArasTools {
     contextLines?: number
     maxMethods?: number
     maxSnippetsPerMethod?: number
+    outFile?: string
   }): Promise<ToolResult> {
     let refine: RegExp | undefined
     if (input.regex) {
@@ -561,17 +562,27 @@ export class ArasTools {
         maxMethods: input.maxMethods ?? 50,
         maxSnippetsPerMethod: input.maxSnippetsPerMethod ?? 5
       })
-      return ok(
-        JSON.stringify({
-          pattern: input.pattern,
-          regex: input.regex ?? null,
-          candidateCount: res.candidateCount,
-          returnedCount: res.matches.length,
-          truncated: res.truncated,
-          ...(res.skipped.length ? { skipped: res.skipped } : {}),
-          methods: res.matches
-        })
-      )
+      const payload = {
+        pattern: input.pattern,
+        regex: input.regex ?? null,
+        candidateCount: res.candidateCount,
+        returnedCount: res.matches.length,
+        truncated: res.truncated,
+        ...(res.skipped.length ? { skipped: res.skipped } : {}),
+        methods: res.matches
+      }
+      if (input.outFile) {
+        writeFileSync(input.outFile, JSON.stringify(payload, null, 2), 'utf8')
+        return ok(
+          JSON.stringify({
+            saved: input.outFile,
+            candidateCount: res.candidateCount,
+            returnedCount: res.matches.length,
+            truncated: res.truncated
+          })
+        )
+      }
+      return ok(JSON.stringify(payload))
     } catch (e) {
       return err(messageOf(e))
     }
