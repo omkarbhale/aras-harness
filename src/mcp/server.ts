@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { ConnectionManager } from './connection'
 import { ArasTools, type ToolResult } from './tools'
+import { loadSkills, readSkillBody, SKILL_URI_PREFIX } from './skills'
 
 const VERSION = '0.2.0'
 
@@ -85,7 +86,8 @@ export function createServer(tools: ArasTools): McpServer {
         '(1-based) — the response includes a `page` block { page, pageMax, itemMax }. ' +
         'With outFile: ALL items are written as pretty-printed JSON to that absolute path (the 50-item ' +
         'cap is bypassed), and only { saved, count } is returned to the agent — use this for large result ' +
-        'sets you intend to analyse locally rather than read in-context.',
+        'sets you intend to analyse locally rather than read in-context. ' +
+        "If unsure of AML structure, load the `writing-aml` skill via aras_skill first.",
       inputSchema: {
         aml: z.string().describe('A complete read-only AML document wrapped in <AML>...</AML>.'),
         outFile: z
@@ -111,7 +113,8 @@ export function createServer(tools: ArasTools): McpServer {
         'aras_run_query for reads. Note: custom server-method actions are not recognized as ' +
         'mutating — invoke those with care. ' +
         'With outFile: the full response is written as pretty-printed JSON to that absolute path and ' +
-        'only { saved, count } is returned to the agent.',
+        'only { saved, count } is returned to the agent. ' +
+        "Before your first write in a session, load the `aml-write-safety` skill via aras_skill.",
       inputSchema: {
         aml: z.string().describe('A complete mutating AML document wrapped in <AML>...</AML>.'),
         outFile: z
@@ -166,7 +169,8 @@ export function createServer(tools: ArasTools): McpServer {
         'With outFile: the FULL cleaned response is written as pretty-printed JSON to that absolute ' +
         'path (the 8 000-char context truncation is bypassed), and only { saved, rowCount } is ' +
         'returned to the agent — use this for large result sets (e.g. timesheets, logs) you intend ' +
-        'to analyse locally rather than read in-context.',
+        'to analyse locally rather than read in-context. ' +
+        "For query syntax, load the `odata-queries` skill via aras_skill.",
       inputSchema: {
         query: z.string().describe('OData path + query appended to /server/odata/'),
         outFile: z
@@ -352,6 +356,69 @@ export function createServer(tools: ArasTools): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
     },
     async ({ outDir, items }) => toMcp(await tools.exportItems(outDir, items))
+  )
+
+  // --- Skills: how-to guidance, fetched on demand ---
+  // Exposed BOTH as MCP resources (uri aras-skill://<name>, for clients that browse
+  // resources) AND via the aras_skill tool (the guaranteed-visible fallback — agents act
+  // on tools more readily than resources). Only the short descriptions below cost context;
+  // the markdown bodies load only when a resource/tool call fetches them.
+  const skills = loadSkills()
+
+  for (const skill of skills) {
+    server.registerResource(
+      skill.name,
+      `${SKILL_URI_PREFIX}${skill.name}`,
+      {
+        title: `Aras skill: ${skill.name}`,
+        description: skill.description,
+        mimeType: 'text/markdown'
+      },
+      async (uri) => ({
+        contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readSkillBody(skill.name) ?? '' }]
+      })
+    )
+  }
+
+  const skillNames = skills.map((s) => s.name)
+  const nameSchema =
+    skillNames.length > 0
+      ? z.enum(skillNames as [string, ...string[]]).optional()
+      : z.string().optional()
+
+  server.registerTool(
+    'aras_skill',
+    {
+      title: 'Load Aras usage skill',
+      description:
+        'Authoritative how-to guidance for driving this server correctly. PROACTIVELY load the ' +
+        'relevant skill BEFORE you act — do not rely on assumptions about AML / OData / the Aras ' +
+        'metamodel:\n' +
+        '• `writing-aml` — before composing ANY AML for aras_run_query / aras_run_write.\n' +
+        '• `aml-write-safety` — before your first add/update/delete/promote/lock in a session.\n' +
+        '• `aras-schema` — before introspecting or querying an unfamiliar instance.\n' +
+        '• `odata-queries` — before composing an aras_run_odata query.\n' +
+        'Omit `name` (or pass "list") to list skills; pass a name to get its full markdown. ' +
+        'Cheap, read-only, needs no active connection.',
+      inputSchema: {
+        name: nameSchema.describe('Skill to load. Omit (or "list") to list all available skills.')
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ name }) => {
+      if (!name || name === 'list') {
+        const list = skills.map((s) => `- ${s.name}: ${s.description}`).join('\n')
+        return toMcp({
+          text: skills.length
+            ? `Available Aras skills (call aras_skill with a name to load the full guide):\n${list}`
+            : 'No skills are bundled with this server build.'
+        })
+      }
+      const body = readSkillBody(name)
+      return body
+        ? toMcp({ text: body })
+        : toMcp({ text: `Unknown skill: ${name}. Call aras_skill with no name to list skills.`, isError: true })
+    }
   )
 
   return server
