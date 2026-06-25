@@ -6,13 +6,25 @@ describe('skills', () => {
     expect(findSkillsDir()).toBeTruthy()
   })
 
-  it('loads all four skills with name + description', () => {
+  it('loads all bundled skills with name + description', () => {
     const skills = loadSkills()
     const names = skills.map((s) => s.name).sort()
-    expect(names).toEqual(['aml-write-safety', 'aras-schema', 'odata-queries', 'writing-aml'])
+    expect(names).toEqual([
+      'aml-write-safety',
+      'aras-schema',
+      'odata-queries',
+      'schema-discovery',
+      'writing-aml'
+    ])
     for (const s of skills) {
       expect(s.description.length).toBeGreaterThan(10)
     }
+  })
+
+  it('reads the schema-discovery subagent brief', () => {
+    const body = readSkillBody('schema-discovery')
+    expect(body).toContain('Schema discovery')
+    expect(body).toBeTruthy()
   })
 
   it('reads a skill body including its heading', () => {

@@ -62,6 +62,12 @@ describe('ArasTools.connect', () => {
     expect(JSON.parse(r.text)).toMatchObject({ connected: true, database: 'D', latencyMs: 7 })
   })
 
+  it('includes schema-discovery guidance in the connect result', async () => {
+    const { tools } = setup()
+    const r = await tools.connect({ url: 'http://x/Server', database: 'D', username: 'u', password: 'p' })
+    expect(JSON.parse(r.text).guidance).toMatch(/subagent/i)
+  })
+
   it('returns an error result when credentials are incomplete', async () => {
     const { tools } = setup()
     const r = await tools.connect({ url: 'http://x/Server' })

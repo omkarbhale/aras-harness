@@ -206,7 +206,11 @@ export class ArasTools {
           to: creds.name ?? creds.instanceUrl,
           database: creds.database,
           username: creds.username,
-          latencyMs
+          latencyMs,
+          guidance:
+            'For schema discovery (itemtypes/properties/relationships), prefer spawning a ' +
+            'subagent and have it return only the relevant slice — keeps this context lean. ' +
+            'Load the `schema-discovery` skill via aras_skill for instructions to hand it.'
         })
       )
     } catch (e) {

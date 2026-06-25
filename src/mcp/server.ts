@@ -190,7 +190,10 @@ export function createServer(tools: ArasTools): McpServer {
     'aras_list_itemtypes',
     {
       title: 'List ItemTypes',
-      description: 'List the names of all ItemTypes defined in the active instance.',
+      description:
+        'List the names of all ItemTypes defined in the active instance. Prefer running ' +
+        'this inside a subagent dedicated to schema discovery so full schema dumps don\'t ' +
+        'fill the main context.',
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
@@ -203,7 +206,9 @@ export function createServer(tools: ArasTools): McpServer {
       title: 'Introspect an ItemType',
       description:
         'Get an ItemType with its Property definitions (name, label, data_type) and the RelationshipTypes ' +
-        'whose source is this ItemType. Use before writing AML to learn the schema and relationships.',
+        'whose source is this ItemType. Use before writing AML to learn the schema and relationships. ' +
+        'Prefer running this inside a subagent dedicated to schema discovery so full schema dumps ' +
+        'don\'t fill the main context.',
       inputSchema: {
         name: z.string().describe('Exact ItemType name, e.g. "Part".')
       },
